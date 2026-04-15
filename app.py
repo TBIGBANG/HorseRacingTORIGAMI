@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import itertools
@@ -33,7 +32,7 @@ BET_TYPE_LABELS = {
 
 BET_TYPE_QUERY_TYPES = {
     "tansho": ["b1", "a1"],
-    "fukusho": ["b1", "a2", "b2"],
+    "fukusho": ["b2", "a2"],
     "umaren": ["b4", "c4"],
     "wide": ["b5", "c5"],
     "umatan": ["b6", "c6"],
@@ -65,6 +64,9 @@ def inject_mobile_css() -> None:
     st.markdown(
         """
         <style>
+        .stApp {
+            font-size: 16px;
+        }
         .block-container {
             max-width: 760px;
             padding-top: 5.8rem;
@@ -78,18 +80,34 @@ def inject_mobile_css() -> None:
             border-radius: 18px;
             background: rgba(255,255,255,.03);
             margin-bottom: 0.9rem;
+            box-shadow: 0 6px 18px rgba(0,0,0,.06);
         }
         .app-hero-title {
             font-size: 1.55rem;
             line-height: 1.25;
             font-weight: 800;
             margin: 0 0 .3rem 0;
+            letter-spacing: -.01em;
         }
         .app-hero-sub {
             font-size: .96rem;
             color: rgba(250,250,250,.72);
             line-height: 1.5;
             margin: 0;
+        }
+        h1 {
+            font-size: 1.55rem !important;
+            line-height: 1.25 !important;
+            margin-top: 0.25rem !important;
+            margin-bottom: 0.35rem !important;
+        }
+        h2, h3 {
+            font-size: 1.12rem !important;
+            line-height: 1.35 !important;
+        }
+        p, li, label, .stMarkdown, .stCaption {
+            font-size: .97rem !important;
+            line-height: 1.55 !important;
         }
         .stTextInput input, .stNumberInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {
             border-radius: 14px !important;
@@ -113,7 +131,14 @@ def inject_mobile_css() -> None:
             border-radius: 16px;
             padding: .7rem .85rem;
         }
+        .stAlert {
+            border-radius: 14px !important;
+        }
+
         [data-testid="InputInstructions"] {
+            display: none !important;
+        }
+        .stForm [data-testid="InputInstructions"] {
             display: none !important;
         }
         .result-card {
@@ -122,6 +147,7 @@ def inject_mobile_css() -> None:
             padding: 0.95rem 1rem;
             margin: 0.65rem 0;
             background: rgba(255,255,255,.03);
+            box-shadow: 0 4px 14px rgba(0,0,0,.04);
         }
         .result-grid {
             display: grid;
@@ -153,7 +179,36 @@ def inject_mobile_css() -> None:
             border-radius: 14px;
             padding: .85rem .95rem;
             margin: .45rem 0;
-            background: rgba(255,255,255,.03);
+            background: rgba(255,255,255,.025);
+        }
+        .section-card {
+            border: 1px solid rgba(128,128,128,.14);
+            border-radius: 16px;
+            padding: .4rem .45rem .1rem .45rem;
+            background: rgba(255,255,255,.02);
+            margin-bottom: .85rem;
+        }
+        @media (max-width: 640px) {
+            .block-container {
+                padding-top: 6.4rem;
+                padding-left: 0.78rem;
+                padding-right: 0.78rem;
+                padding-bottom: 4.5rem;
+            }
+            .app-hero {
+                padding: .95rem .9rem .8rem .9rem;
+                border-radius: 16px;
+            }
+            .app-hero-title {
+                font-size: 1.42rem;
+            }
+            .app-hero-sub {
+                font-size: .93rem;
+            }
+            .result-grid {
+                grid-template-columns: 1fr 1fr;
+                gap: .48rem .6rem;
+            }
         }
         </style>
         """,
@@ -161,90 +216,82 @@ def inject_mobile_css() -> None:
     )
 
 
-def check_password_gate() -> bool:
-    inject_mobile_css()
-    if not APP_PASSWORD:
-        return True
-    if st.session_state.get("authed"):
-        return True
 
+
+def render_top_hero(title: str, subtitle: str) -> None:
     st.markdown(
-        """
-        <div class="app-hero">
-          <div class="app-hero-title">アクセスコード入力</div>
-          <p class="app-hero-sub">アクセスコードを入力してアプリを開いてください。</p>
-        </div>
-        """,
+        f"<div class='app-hero'><div class='app-hero-title'>{title}</div><p class='app-hero-sub'>{subtitle}</p></div>",
         unsafe_allow_html=True,
     )
-    code = st.text_input("アクセスコード", type="password", placeholder="アクセスコードを入力")
-    if st.button("開く"):
-        if code == APP_PASSWORD:
-            st.session_state["authed"] = True
-            st.rerun()
-        else:
-            st.error("アクセスコードが違います。")
-    return False
 
-
-def normalize_selection(selection: str, bet_type: str) -> str:
-    nums = [str(int(x)) for x in re.findall(r"\d{1,2}", selection)]
-    if bet_type in {"tansho", "fukusho"}:
-        return nums[0] if nums else selection.strip()
-    if bet_type in {"umaren", "wide", "sanrenpuku"}:
-        nums = sorted(nums, key=lambda x: int(x))
-    return "-".join(nums)
-
-
+# =========================
+# Parsing helpers
+# =========================
 def expected_selection_len(bet_type: str) -> int:
     return {
-        "tansho": 1, "fukusho": 1, "umaren": 2, "wide": 2,
-        "umatan": 2, "sanrenpuku": 3, "sanrentan": 3,
+        "tansho": 1,
+        "fukusho": 1,
+        "umaren": 2,
+        "wide": 2,
+        "umatan": 2,
+        "sanrenpuku": 3,
+        "sanrentan": 3,
     }[bet_type]
 
 
-def expand_token_group(part: str, max_horses: int) -> List[str]:
-    part = part.strip().upper()
-    if part == "ALL":
-        return [str(i) for i in range(1, max_horses + 1)]
-    out = []
-    for item in part.split(","):
-        item = item.strip()
-        if re.fullmatch(r"\d{1,2}", item):
-            n = int(item)
-            if 1 <= n <= 18:
-                out.append(str(n))
-    return out
+def normalize_selection(selection: str, bet_type: str) -> str:
+    nums = re.findall(r"\d+", selection)
+    nums = [str(int(n)) for n in nums]
+    if not nums:
+        return selection.strip()
+
+    if bet_type in {"umaren", "wide", "sanrenpuku"}:
+        nums = sorted(nums, key=lambda x: int(x))
+
+    if len(nums) == 1:
+        return nums[0]
+    return "-".join(nums)
 
 
 def expand_selection_input(selection_text: str, bet_type: str, max_horses: int = 18) -> List[str]:
-    selection_text = selection_text.replace(" ", "").strip()
-    if not selection_text:
+    text = selection_text.strip()
+    if not text:
         return []
 
-    if bet_type in {"tansho", "fukusho"}:
-        vals = expand_token_group(selection_text, max_horses)
-        return sorted(set(vals), key=lambda x: int(x))
-
-    parts = selection_text.split("-")
     need = expected_selection_len(bet_type)
-    if len(parts) != need:
+    groups_raw = [g.strip() for g in text.split("-") if g.strip()]
+
+    # 単勝・複勝は「1,3,5」や「1/3/5」にも対応
+    if need == 1 and len(groups_raw) == 1:
+        groups_raw = [re.sub(r"[／/]", ",", groups_raw[0])]
+
+    if len(groups_raw) != need:
         return []
 
-    groups = [expand_token_group(p, max_horses) for p in parts]
-    if any(not g for g in groups):
-        return []
+    groups: List[List[str]] = []
+    for g in groups_raw:
+        normalized_group = re.sub(r"[、/／\s]+", ",", g)
+        upper_group = normalized_group.upper()
+        if "ALL" in [token.strip().upper() for token in upper_group.split(",") if token.strip()]:
+            nums = [str(n) for n in range(1, max_horses + 1)]
+        else:
+            nums = [str(int(n)) for n in re.findall(r"\d+", normalized_group)]
+        if not nums:
+            return []
+        groups.append(nums)
 
+    expanded: List[str] = []
     seen = set()
-    out = []
     for combo in itertools.product(*groups):
         if len(set(combo)) != need:
             continue
-        normalized = normalize_selection("-".join(combo), bet_type)
-        if normalized not in seen:
-            seen.add(normalized)
-            out.append(normalized)
-    return sorted(out, key=lambda s: tuple(int(x) for x in s.split("-")))
+        if bet_type in {"umaren", "wide", "sanrenpuku"}:
+            combo = tuple(sorted(combo, key=lambda x: int(x)))
+        selection = "-".join(combo)
+        if selection not in seen:
+            seen.add(selection)
+            expanded.append(selection)
+    return expanded
 
 
 def parse_bets(text: str, bet_type: str, max_horses: int = 18) -> Tuple[List[Bet], List[str], List[Tuple[int, str, List[str], int]]]:
@@ -261,7 +308,7 @@ def parse_bets(text: str, bet_type: str, max_horses: int = 18) -> Tuple[List[Bet
             errors.append(f"{idx}行目: '買い目 金額' の形式で入力してください")
             continue
         amount_text = parts[-1]
-        selection_text = "".join(parts[:-1]).replace(" ", "")
+        selection_text = " ".join(parts[:-1]).replace(" ", "")
         try:
             amount = int(amount_text)
         except ValueError:
@@ -273,20 +320,22 @@ def parse_bets(text: str, bet_type: str, max_horses: int = 18) -> Tuple[List[Bet
 
         expanded = expand_selection_input(selection_text, bet_type, max_horses=max_horses)
         if not expanded:
-            errors.append(f"{idx}行目: 買い目を解釈できませんでした")
+            errors.append(
+                f"{idx}行目: 買い目を解釈できませんでした。"
+                f" 券種{BET_TYPE_LABELS[bet_type]}なら 例: {example_for_bet_type(bet_type)}"
+            )
             continue
 
         previews.append((idx, selection_text, expanded, amount))
         for selection in expanded:
             bets.append(Bet(selection=normalize_selection(selection, bet_type), amount=amount, source=selection_text))
+
     return bets, errors, previews
 
 
-def parse_manual_odds(text: str, bet_type: str, max_horses: int = 18) -> Tuple[Dict[str, float], Dict[str, str], List[str]]:
+def parse_manual_odds(text: str, bet_type: str, max_horses: int = 18) -> Tuple[Dict[str, float], List[str]]:
     odds_map: Dict[str, float] = {}
-    odds_display_map: Dict[str, str] = {}
     errors: List[str] = []
-
     for idx, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
@@ -296,40 +345,21 @@ def parse_manual_odds(text: str, bet_type: str, max_horses: int = 18) -> Tuple[D
             errors.append(f"手動オッズ {idx}行目: '買い目 オッズ' の形式で入力してください")
             continue
         odds_text = parts[-1]
-        selection_text = "".join(parts[:-1]).replace(" ", "")
+        selection_text = " ".join(parts[:-1]).replace(" ", "")
+        try:
+            odds = float(odds_text)
+        except ValueError:
+            errors.append(f"手動オッズ {idx}行目: オッズは数値で入力してください")
+            continue
 
         expanded = expand_selection_input(selection_text, bet_type, max_horses=max_horses)
         if not expanded:
             errors.append(f"手動オッズ {idx}行目: 買い目を解釈できませんでした")
             continue
 
-        display = odds_text.replace("〜", "-").replace("～", "-")
-        if bet_type == "fukusho":
-            m = re.search(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", display)
-            if m:
-                num = float(m.group(1))
-                display = f"{float(m.group(1)):.1f}-{float(m.group(2)):.1f}"
-            else:
-                try:
-                    num = float(display)
-                    display = f"{num:.1f}"
-                except ValueError:
-                    errors.append(f"手動オッズ {idx}行目: 複勝は 4.4-8.0 の形式で入力してください")
-                    continue
-        else:
-            try:
-                num = float(display)
-                display = f"{num:.1f}"
-            except ValueError:
-                errors.append(f"手動オッズ {idx}行目: オッズは数値で入力してください")
-                continue
-
         for selection in expanded:
-            norm = normalize_selection(selection, bet_type)
-            odds_map[norm] = num
-            odds_display_map[norm] = display
-
-    return odds_map, odds_display_map, errors
+            odds_map[normalize_selection(selection, bet_type)] = odds
+    return odds_map, errors
 
 
 def example_for_bet_type(bet_type: str) -> str:
@@ -344,23 +374,29 @@ def example_for_bet_type(bet_type: str) -> str:
     }[bet_type]
 
 
+# =========================
+# Scraping
+# =========================
 def normalize_race_id(raw: str) -> str:
-    return re.sub(r"\D", "", (raw or "").strip())
+    value = (raw or "").strip()
+    digits = re.sub(r"\D", "", value)
+    return digits
 
 
 def build_odds_urls(race_id: str, bet_type: str) -> List[str]:
-    urls = []
+    urls: List[str] = []
     for q in BET_TYPE_QUERY_TYPES.get(bet_type, []):
         urls.append(f"https://race.netkeiba.com/odds/index.html?type={q}&race_id={race_id}")
     urls.append(f"https://race.netkeiba.com/odds/index.html?race_id={race_id}")
     urls.append(f"https://race.netkeiba.com/race/odds.html?race_id={race_id}")
-    out = []
+
     seen = set()
-    for url in urls:
-        if url not in seen:
-            seen.add(url)
-            out.append(url)
-    return out
+    ordered: List[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            ordered.append(u)
+    return ordered
 
 
 def fetch_html(url: str) -> str:
@@ -378,132 +414,27 @@ def fetch_html(url: str) -> str:
         return response.text
 
 
-def detect_field_size_from_soup(soup: BeautifulSoup) -> Optional[int]:
-    nums = []
-    for node in soup.select("td, span"):
-        txt = node.get_text(" ", strip=True)
-        if re.fullmatch(r"\d{1,2}", txt):
-            n = int(txt)
-            if 1 <= n <= 18:
-                nums.append(n)
-    return max(nums) if nums else None
-
-
-def parse_range_text(raw: str) -> Tuple[Optional[float], Optional[str]]:
-    txt = (raw or "").replace(",", "").replace("〜", "-").replace("～", "-").replace("―", "-").replace("–", "-").replace("−", "-").strip()
-    m = re.search(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", txt)
-    if m:
-        low = float(m.group(1))
-        high = float(m.group(2))
-        return low, f"{low:.1f}-{high:.1f}"
-    m2 = re.search(r"(?<!\d)(\d+(?:\.\d+)?)(?!\d)", txt)
-    if m2:
-        val = float(m2.group(1))
-        return val, f"{val:.1f}"
-    return None, None
-
-
-def parse_tansho_rows(html: str) -> Tuple[Dict[str, float], Dict[str, str], List[Dict[str, str]], Optional[int]]:
+def fetch_horse_names(race_id: str) -> Dict[str, str]:
+    url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
+    try:
+        html = fetch_html(url)
+    except:
+        return {}
     soup = BeautifulSoup(html, "html.parser")
-    field_size = detect_field_size_from_soup(soup)
-
-    odds_map: Dict[str, float] = {}
-    odds_display_map: Dict[str, str] = {}
-    rows_debug: List[Dict[str, str]] = []
-
+    horse_map = {}
     for tr in soup.select("tr"):
         tds = tr.select("td")
-        if not tds:
+        if len(tds) < 3:
             continue
-
-        waku = None
-        umaban = None
-        name = None
-        odds = None
-
-        for td in tds:
-            text = td.get_text(" ", strip=True)
-            classes = " ".join(td.get("class", []))
-            a = td.select_one("a")
-            if a:
-                a_txt = a.get_text(" ", strip=True)
-                if a_txt and not re.fullmatch(r"\d{1,2}", a_txt) and len(a_txt) > 1:
-                    name = a_txt
-
-            if re.fullmatch(r"\d", text):
-                n = int(text)
-                if 1 <= n <= 8 and waku is None:
-                    waku = str(n)
-
-            if re.fullmatch(r"\d{1,2}", text):
-                n = int(text)
-                if 1 <= n <= 18:
-                    umaban = str(n)
-
-            if re.fullmatch(r"\d+(?:\.\d+)?", text):
-                val = float(text)
-                if 1.0 <= val <= 1000:
-                    if odds is None:
-                        odds = val
-                    if "odds" in classes.lower():
-                        odds = val
-
-        if umaban and name and odds is not None:
-            if field_size is None or int(umaban) <= field_size:
-                odds_map[umaban] = odds
-                odds_display_map[umaban] = f"{odds:.1f}"
-                rows_debug.append({
-                    "waku": waku or "-",
-                    "umaban": umaban,
-                    "name": name,
-                    "odds": f"{odds:.1f}",
-                })
-
-    return odds_map, odds_display_map, rows_debug, field_size
-
-
-def parse_fukusho_rows(html: str) -> Tuple[Dict[str, float], Dict[str, str], Optional[int]]:
-    soup = BeautifulSoup(html, "html.parser")
-    field_size = detect_field_size_from_soup(soup)
-    place_map: Dict[str, float] = {}
-    place_display: Dict[str, str] = {}
-
-    for table in soup.select("table"):
-        rows = table.select("tr")
-        if len(rows) < 2:
+        nums = re.findall(r"^\d{1,2}$", tds[1].get_text(strip=True))
+        if not nums:
             continue
-        headers = [re.sub(r"\s+", "", c.get_text(" ", strip=True)) for c in rows[0].select("th,td")]
-        horse_idx = None
-        odds_idx = None
-        for idx, h in enumerate(headers):
-            if horse_idx is None and ("馬番" in h or h == "馬" or "馬番号" in h):
-                horse_idx = idx
-            if odds_idx is None and "オッズ" in h:
-                odds_idx = idx
-        if horse_idx is None or odds_idx is None:
-            continue
-
-        sample = " ".join(r.get_text(" ", strip=True) for r in rows[:3])
-        if "複勝" not in sample and "複" not in sample:
-            continue
-
-        for tr in rows[1:]:
-            cells = tr.select("th,td")
-            if max(horse_idx, odds_idx) >= len(cells):
-                continue
-            horse_text = cells[horse_idx].get_text(" ", strip=True)
-            odds_text = cells[odds_idx].get_text(" ", strip=True)
-            if not re.fullmatch(r"\d{1,2}", horse_text):
-                continue
-            horse = str(int(horse_text))
-            if field_size is not None and int(horse) > field_size:
-                continue
-            value, display = parse_range_text(odds_text)
-            if value is not None and display is not None:
-                place_map[horse] = value
-                place_display[horse] = display
-
-    return place_map, place_display, field_size
+        num = nums[0]
+        a = tr.select_one("a")
+        if a:
+            name = a.get_text(strip=True)
+            horse_map[num] = name
+    return horse_map
 
 
 def likely_odds_value(value: str) -> Optional[float]:
@@ -511,25 +442,102 @@ def likely_odds_value(value: str) -> Optional[float]:
     if not re.fullmatch(r"\d{1,5}(?:\.\d{1,2})?", txt):
         return None
     num = float(txt)
-    return num if num > 0 else None
+    if num <= 0:
+        return None
+    return num
+
 
 
 def extract_selection_from_text(text: str, bet_type: str, field_size: Optional[int] = None) -> Optional[str]:
     raw_nums = re.findall(r"(?<!\d)\d{1,2}(?!\d)", text)
-    nums = [n for n in raw_nums if field_size is None or 1 <= int(n) <= field_size]
+    if field_size is not None:
+        nums = [n for n in raw_nums if 1 <= int(n) <= field_size]
+    else:
+        nums = raw_nums
     need = expected_selection_len(bet_type)
     if len(nums) < need:
         return None
     return normalize_selection("-".join(nums[:need]), bet_type)
 
 
+def detect_field_size(html: str) -> Optional[int]:
+    """Try to infer runner count from race/odds pages before parsing odds grids."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    selector_candidates = [
+        ".RaceTableArea td[class*='Umaban']",
+        ".RaceTableArea span[class*='Umaban']",
+        ".Shutuba_Table td[class*='Umaban']",
+        ".Shutuba_Table span[class*='Umaban']",
+        "table td[class*='Umaban']",
+        "table span[class*='Umaban']",
+        "[class*='Horse_Num']",
+        "[class*='umaban']",
+    ]
+    values = []
+    for sel in selector_candidates:
+        for node in soup.select(sel):
+            txt = node.get_text(" ", strip=True)
+            if re.fullmatch(r"\d{1,2}", txt):
+                values.append(int(txt))
+
+    if values:
+        uniq = sorted(set(v for v in values if 1 <= v <= 18))
+        if uniq:
+            return max(uniq)
+
+    text = soup.get_text("\n", strip=True)
+    patterns = [
+        r"(\d{1,2})頭",
+        r"出走\D{0,4}(\d{1,2})頭",
+        r"立て\D{0,2}(\d{1,2})頭",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text)
+        if m:
+            n = int(m.group(1))
+            if 1 <= n <= 18:
+                return n
+
+    nums = [int(n) for n in re.findall(r"(?<!\d)(?:[1-9]|1[0-8])(?!\d)", text)]
+    if nums:
+        freq = {}
+        for n in nums:
+            freq[n] = freq.get(n, 0) + 1
+        dense = [n for n, c in freq.items() if c >= 2]
+        if len(dense) >= 6:
+            return max(dense)
+    return None
+
+
+def build_race_context_urls(race_id: str) -> List[str]:
+    urls = [
+        f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}",
+        f"https://race.netkeiba.com/race/result.html?race_id={race_id}",
+        f"https://race.netkeiba.com/race/odds.html?race_id={race_id}",
+        f"https://race.netkeiba.com/odds/index.html?race_id={race_id}",
+    ]
+    seen = set()
+    out = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+
 def detect_odds_column_indexes(table) -> List[int]:
-    indexes = []
-    for tr in table.select("tr")[:6]:
+    indexes: List[int] = []
+    rows = table.select("tr")
+    for tr in rows[:6]:
         cells = tr.select("th,td")
-        headers = [re.sub(r"\s+", "", c.get_text(" ", strip=True)) for c in cells]
-        for idx, h in enumerate(headers):
-            if "オッズ" in h:
+        if not cells:
+            continue
+        headers = [c.get_text(" ", strip=True) for c in cells]
+        for idx, header in enumerate(headers):
+            normalized = re.sub(r"\s+", "", header)
+            if "オッズ" in normalized:
                 indexes.append(idx)
         if indexes:
             break
@@ -543,6 +551,7 @@ def extract_odds_from_cell(cell) -> Optional[float]:
         if isinstance(val, str):
             candidates.append(val)
     candidates.append(cell.get_text(" ", strip=True))
+
     for raw in candidates:
         nums = re.findall(r"\d{1,5}(?:\.\d{1,2})?", raw.replace(",", ""))
         for num in nums:
@@ -555,11 +564,14 @@ def extract_odds_from_cell(cell) -> Optional[float]:
 def extract_odds_candidates_from_tables(html: str, bet_type: str, field_size: Optional[int] = None) -> Dict[str, float]:
     soup = BeautifulSoup(html, "html.parser")
     odds_map: Dict[str, float] = {}
+
+    # まず「オッズ」列を見つけ、その列の数値だけを使う
     for table in soup.select("table"):
         odds_indexes = detect_odds_column_indexes(table)
         rows = table.select("tr")
         if not odds_indexes or not rows:
             continue
+
         for tr in rows:
             cells = tr.select("th,td")
             if len(cells) < 2:
@@ -568,15 +580,155 @@ def extract_odds_candidates_from_tables(html: str, bet_type: str, field_size: Op
             selection = extract_selection_from_text(joined, bet_type, field_size=field_size)
             if not selection:
                 continue
+
             odds = None
             for idx in odds_indexes:
-                if idx < len(cells):
-                    odds = extract_odds_from_cell(cells[idx])
-                    if odds is not None:
-                        break
+                if idx >= len(cells):
+                    continue
+                odds = extract_odds_from_cell(cells[idx])
+                if odds is not None:
+                    break
+
             if odds is not None:
                 odds_map.setdefault(selection, odds)
+
+    if odds_map:
+        return odds_map
+
+    # セル自体に「オッズ」ラベルが付いているケースに対応
+    for table in soup.select("table"):
+        for tr in table.select("tr"):
+            cells = tr.select("th,td")
+            if len(cells) < 2:
+                continue
+            joined = " ".join(c.get_text(" ", strip=True) for c in cells)
+            selection = extract_selection_from_text(joined, bet_type, field_size=field_size)
+            if not selection:
+                continue
+
+            odds = None
+            for cell in cells:
+                meta = " ".join(
+                    str(cell.attrs.get(k, ""))
+                    for k in ["data-label", "aria-label", "title", "class"]
+                )
+                if "オッズ" in meta or "odds" in meta.lower():
+                    odds = extract_odds_from_cell(cell)
+                    if odds is not None:
+                        break
+
+            if odds is not None:
+                odds_map.setdefault(selection, odds)
+
+    if odds_map:
+        return odds_map
+
+    # 最後の保険: テキストから「オッズ」の近くの数値だけ拾う
+    text = soup.get_text("\n", strip=True)
+    for line in text.splitlines():
+        if "オッズ" not in line:
+            continue
+        selection = extract_selection_from_text(line, bet_type, field_size=field_size)
+        if not selection:
+            continue
+        tail = line.split("オッズ", 1)[-1]
+        nums = re.findall(r"\d{1,5}(?:\.\d{1,2})?", tail)
+        for raw in nums:
+            cand = likely_odds_value(raw)
+            if cand is not None:
+                odds_map.setdefault(selection, cand)
+                break
+
     return odds_map
+
+
+def parse_win_place_table(html: str) -> Tuple[Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    win_map: Dict[str, float] = {}
+    win_display: Dict[str, str] = {}
+    place_map: Dict[str, float] = {}
+    place_display: Dict[str, str] = {}
+
+    def clean_header(s: str) -> str:
+        return re.sub(r"\s+", "", s)
+
+    def parse_place_text(raw: str) -> Tuple[Optional[float], Optional[str]]:
+        raw = raw.replace("〜", "-").replace("～", "-").replace("―", "-").replace("–", "-")
+        nums = re.findall(r"\d+(?:\.\d+)?", raw)
+        if not nums:
+            return None, None
+        if len(nums) >= 2:
+            low = float(nums[0]); high = float(nums[1])
+            return low, f"{low:.1f}-{high:.1f}"
+        val = float(nums[0])
+        return val, f"{val:.1f}"
+
+    for table in soup.select("table"):
+        rows = table.select("tr")
+        if not rows:
+            continue
+
+        headers = [clean_header(c.get_text(" ", strip=True)) for c in rows[0].select("th,td")]
+        horse_idx = win_idx = place_idx = None
+
+        for idx, h in enumerate(headers):
+            if horse_idx is None and ("馬番" in h or h == "馬" or "馬番号" in h):
+                horse_idx = idx
+            if win_idx is None and "単勝" in h:
+                win_idx = idx
+            if place_idx is None and "複勝" in h:
+                place_idx = idx
+
+        if horse_idx is None:
+            for tr in rows[:6]:
+                cells = tr.select("th,td")
+                for idx, c in enumerate(cells):
+                    cell_txt = c.get_text(" ", strip=True)
+                    if re.fullmatch(r"\d{1,2}", cell_txt):
+                        horse_idx = idx
+                        break
+                if horse_idx is not None:
+                    break
+
+        if horse_idx is None or (win_idx is None and place_idx is None):
+            continue
+
+        for tr in rows[1:]:
+            cells = tr.select("th,td")
+            if horse_idx >= len(cells):
+                continue
+
+            horse_text = cells[horse_idx].get_text(" ", strip=True)
+            m = re.search(r"(?<!\d)(\d{1,2})(?!\d)", horse_text)
+            if not m:
+                joined = " ".join(c.get_text(" ", strip=True) for c in cells[: max(horse_idx + 1, 2)])
+                m = re.search(r"(?<!\d)(\d{1,2})(?!\d)", joined)
+            if not m:
+                continue
+
+            horse = str(int(m.group(1)))
+            if not (1 <= int(horse) <= 18):
+                continue
+
+            if win_idx is not None and win_idx < len(cells):
+                raw = cells[win_idx].get_text(" ", strip=True)
+                nums = re.findall(r"\d+(?:\.\d+)?", raw.replace(",", ""))
+                if nums:
+                    val = float(nums[0])
+                    win_map.setdefault(horse, val)
+                    win_display.setdefault(horse, f"{val:.1f}")
+
+            if place_idx is not None and place_idx < len(cells):
+                raw = cells[place_idx].get_text(" ", strip=True)
+                val, disp = parse_place_text(raw)
+                if val is not None and disp is not None:
+                    place_map.setdefault(horse, val)
+                    place_display.setdefault(horse, disp)
+
+        if win_map or place_map:
+            break
+
+    return win_map, win_display, place_map, place_display
 
 
 def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float], Dict[str, str], str, Optional[str]]:
@@ -584,44 +736,45 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
     if not race_id or len(race_id) != 12:
         raise ValueError("レースIDが不正です。12桁のレースIDを入力してください。")
 
-    candidate_urls = build_odds_urls(race_id, bet_type)
+    candidate_urls: List[str] = build_odds_urls(race_id, bet_type)
+    detected_field_size: Optional[int] = None
+
+    for ctx_url in build_race_context_urls(race_id):
+        try:
+            ctx_html = fetch_html(ctx_url)
+            detected_field_size = detect_field_size(ctx_html)
+            if detected_field_size:
+                break
+        except Exception:
+            pass
+
     last_error: Optional[Exception] = None
     last_url = candidate_urls[0]
 
-    if bet_type == "tansho":
+    if bet_type in {"tansho", "fukusho"}:
         primary_url = f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"
-        try_urls = [primary_url] + [u for u in candidate_urls if u != primary_url]
-        for url in try_urls:
+        candidate_urls = [primary_url] + [u for u in candidate_urls if u != primary_url]
+        for url in candidate_urls:
             last_url = url
             try:
                 html = fetch_html(url)
-                odds_map, odds_display, rows_debug, field_size = parse_tansho_rows(html)
-                if odds_map:
-                    notes = []
-                    if field_size:
-                        notes.append(f"認識頭数: {field_size}頭")
-                    notes.append("単勝は行ベースで、何枠・馬番・馬名・オッズを抽出しています。")
-                    preview = rows_debug[:5]
-                    if preview:
-                        notes.append("抽出例: " + " / ".join(f"{r['waku']}枠 {r['umaban']} {r['name']} {r['odds']}倍" for r in preview))
-                    return odds_map, odds_display, url, " / ".join(notes)
-            except Exception as exc:
-                last_error = exc
+                local_field_size = detected_field_size or detect_field_size(html)
+                win_map, win_display, place_map, place_display = parse_win_place_table(html)
+                if local_field_size:
+                    win_map = {k: v for k, v in win_map.items() if int(k) <= local_field_size}
+                    win_display = {k: v for k, v in win_display.items() if int(k) <= local_field_size}
+                    place_map = {k: v for k, v in place_map.items() if int(k) <= local_field_size}
+                    place_display = {k: v for k, v in place_display.items() if int(k) <= local_field_size}
 
-    if bet_type == "fukusho":
-        primary_url = f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"
-        try_urls = [primary_url] + [u for u in candidate_urls if u != primary_url]
-        for url in try_urls:
-            last_url = url
-            try:
-                html = fetch_html(url)
-                odds_map, odds_display, field_size = parse_fukusho_rows(html)
-                if odds_map:
-                    notes = []
-                    if field_size:
-                        notes.append(f"認識頭数: {field_size}頭")
-                    notes.append("複勝の計算は下限オッズを使用します。")
-                    return odds_map, odds_display, url, " / ".join(notes)
+                if bet_type == "tansho" and win_map:
+                    warning_parts = [f"認識頭数: {local_field_size}頭"] if local_field_size else []
+                    return win_map, win_display, url, " / ".join(warning_parts) if warning_parts else None
+
+                if bet_type == "fukusho" and place_map:
+                    warning_parts = ["複勝の計算は下限オッズを使用します。"]
+                    if local_field_size:
+                        warning_parts.insert(0, f"認識頭数: {local_field_size}頭")
+                    return place_map, place_display, url, " / ".join(warning_parts)
             except Exception as exc:
                 last_error = exc
 
@@ -629,38 +782,65 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
         last_url = url
         try:
             html = fetch_html(url)
-            soup = BeautifulSoup(html, "html.parser")
-            field_size = detect_field_size_from_soup(soup)
-            odds_map = extract_odds_candidates_from_tables(html, bet_type, field_size=field_size)
+            local_field_size = detected_field_size or detect_field_size(html)
+            odds_map = extract_odds_candidates_from_tables(html, bet_type, field_size=local_field_size)
             if odds_map:
                 odds_display = {k: f"{v:.1f}" for k, v in odds_map.items()}
-                warning = f"認識頭数: {field_size}頭" if field_size else None
+                warning_parts = []
+                if local_field_size:
+                    warning_parts.append(f"認識頭数: {local_field_size}頭")
+                if len(odds_map) < 2:
+                    warning_parts.append("一部しか抽出できていない可能性があります。結果を確認してください。")
+                warning = " / ".join(warning_parts) if warning_parts else None
                 return odds_map, odds_display, url, warning
         except Exception as exc:
             last_error = exc
 
-    warning = "オッズ抽出に失敗しました。手動オッズ入力を使ってください。"
+    warning = "オッズ抽出に失敗しました。netkeiba側のHTML構造が変わっている可能性があります。手動オッズ入力を使ってください。"
+    if detected_field_size:
+        warning += f" 認識頭数: {detected_field_size}頭。"
     if last_error is not None:
         warning += f" 直近エラー: {last_error}"
     return {}, {}, last_url, warning
 
 
+# =========================
+# Core calculations
+# =========================
 def calculate_results(bets: List[Bet], odds_map: Dict[str, float], odds_display_map: Optional[Dict[str, str]] = None) -> Tuple[List[BetResult], int]:
     total_stake = sum(b.amount for b in bets)
     results: List[BetResult] = []
     odds_display_map = odds_display_map or {}
+
     for bet in bets:
         odds = odds_map.get(bet.selection)
         if odds is None:
-            results.append(BetResult(selection=bet.selection, amount=bet.amount, odds=None, odds_display="-", note="オッズ未取得"))
+            results.append(
+                BetResult(
+                    selection=bet.selection,
+                    amount=bet.amount,
+                    odds=None,
+                    odds_display="-",
+                    payout=None,
+                    profit=None,
+                    is_trigami=None,
+                    note="オッズ未取得",
+                )
+            )
             continue
         payout = int(round(bet.amount * odds))
         profit = payout - total_stake
-        results.append(BetResult(
-            selection=bet.selection, amount=bet.amount, odds=odds,
-            odds_display=odds_display_map.get(bet.selection, f"{odds:.1f}"),
-            payout=payout, profit=profit, is_trigami=profit < 0,
-        ))
+        results.append(
+            BetResult(
+                selection=bet.selection,
+                amount=bet.amount,
+                odds=odds,
+                odds_display=odds_display_map.get(bet.selection, f"{odds:.1f}"),
+                payout=payout,
+                profit=profit,
+                is_trigami=profit < 0,
+            )
+        )
     return results, total_stake
 
 
@@ -668,9 +848,10 @@ def suggest_reallocation(bankroll: int, odds_map: Dict[str, float], selected_bet
     valid = [(b.selection, odds_map.get(b.selection)) for b in selected_bets if odds_map.get(b.selection) is not None]
     if not valid:
         return [], "再配分案を出すためのオッズが不足しています。"
+
     reciprocal_sum = sum(1 / odds for _, odds in valid if odds and odds > 0)
     if reciprocal_sum > 1:
-        return [], "この買い目構成では、全てを非トリガミにする再配分は理論上できません。"
+        return [], "この買い目構成では、全てを非トリガミにする再配分は理論上できません。低オッズの買い目を減らすか除外してください。"
 
     raw = {sel: bankroll / odds for sel, odds in valid if odds}
     rounded = {sel: max(100, int(math.ceil(v / 100.0) * 100)) for sel, v in raw.items()}
@@ -686,12 +867,16 @@ def suggest_reallocation(bankroll: int, odds_map: Dict[str, float], selected_bet
                 total -= 100
             i += 1
 
-    proposal = []
+    if total <= 0:
+        return [], "再配分案を計算できませんでした。"
+
+    proposal: List[Tuple[str, int, float, int, int]] = []
     for sel, odds in valid:
         amount = rounded[sel]
         payout = int(round(amount * odds))
         profit = payout - total
         proposal.append((sel, amount, odds, payout, profit))
+
     return proposal, "軍資金の範囲で、できるだけ全買い目が非トリガミになるよう100円単位で丸めた案です。"
 
 
@@ -705,6 +890,8 @@ def result_pill(result: BetResult) -> str:
 
 def render_result_cards(results: List[BetResult]) -> None:
     for r in results:
+        name = horse_map.get(r.selection, "")
+        display_selection = f"{r.selection} {name}" if name else r.selection
         odds_text = f"{r.odds_display}倍" if r.odds is not None else "-"
         payout_text = f"{r.payout:,}円" if r.payout is not None else "-"
         profit_text = f"{r.profit:+,}円" if r.profit is not None else "-"
@@ -713,7 +900,7 @@ def render_result_cards(results: List[BetResult]) -> None:
             f"""
             <div class="result-card">
               <div style="display:flex; justify-content:space-between; align-items:center; gap:.6rem;">
-                <div style="font-weight:700; font-size:1.02rem;">{r.selection}</div>
+                <div style="font-weight:700; font-size:1.02rem;">{display_selection}</div>
                 <div>{result_pill(r)}</div>
               </div>
               <div class="result-grid">
@@ -729,107 +916,221 @@ def render_result_cards(results: List[BetResult]) -> None:
         )
 
 
-def main() -> None:
-    st.set_page_config(page_title="競馬トリガミ回避ツール", page_icon="🏇", layout="centered")
-    if not check_password_gate():
+def require_access() -> None:
+    if not APP_PASSWORD:
+        return
+    if st.session_state.get("auth_ok"):
         return
 
-    st.markdown(
-        """
-        <div class="app-hero">
-          <div class="app-hero-title">競馬トリガミ回避ツール</div>
-          <p class="app-hero-sub">レースID・軍資金・買い目を入力して、netkeibaのオッズ取得または手動オッズ入力で判定します。</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    render_top_hero("🔐 アクセスコードを入力", "共有されたコードを入れると、このツールを開けます。スマホでも押しやすいように下に余白を取っています。")
+    st.warning("この公開アプリは簡易アクセスコードで保護されています。")
+    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+    code = st.text_input("アクセスコード", type="password", placeholder="共有されたコードを入力")
+    if st.button("入る", use_container_width=True):
+        if code == APP_PASSWORD:
+            st.session_state.auth_ok = True
+            st.rerun()
+        else:
+            st.error("アクセスコードが違います。")
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
 
-    with st.form("main_form"):
-        race_id = st.text_input("レースID", placeholder="例: 202609020611")
-        bankroll = st.number_input("軍資金", min_value=100, step=100, value=3000)
-        max_horses = st.number_input("出走頭数（ALL展開用）", min_value=1, max_value=18, step=1, value=18)
-        bet_type = st.selectbox("券種", options=list(BET_TYPE_LABELS.keys()), format_func=lambda k: BET_TYPE_LABELS[k])
-        bets_text = st.text_area("買い目入力", placeholder=f"例:\n{example_for_bet_type(bet_type)}")
-        manual_odds_text = st.text_area("手動オッズ入力（取得失敗時だけ使う）", placeholder="例:\n1 24.0\n2 64.8\nまたは複勝なら\n1 4.4-8.0")
-        submitted = st.form_submit_button("判定する")
 
-    if not submitted:
-        st.info(REQUEST_GAP_NOTICE)
+def render_preview(previews: List[Tuple[int, str, List[str], int]]) -> None:
+    if not previews:
         return
-
-    bets, bet_errors, previews = parse_bets(bets_text, bet_type, max_horses=int(max_horses))
-    if bet_errors:
-        for err in bet_errors:
-            st.error(err)
-        return
-    if not bets:
-        st.warning("買い目を入力してください。")
-        return
-
-    with st.expander("展開プレビュー", expanded=True):
-        total_points = 0
-        total_amount = 0
-        for line_no, source, expanded, amount in previews:
-            total_points += len(expanded)
-            total_amount += len(expanded) * amount
+    with st.expander("買い目の展開結果を確認", expanded=True):
+        for idx, source, expanded, amount in previews:
+            preview_text = " / ".join(expanded[:12])
+            if len(expanded) > 12:
+                preview_text += f" / ...（残り{len(expanded) - 12}件）"
             st.markdown(
-                f'<div class="mini-box"><b>{line_no}行目</b> {source} → {", ".join(expanded[:20])}'
-                + (f" …他{len(expanded)-20}点" if len(expanded) > 20 else "")
-                + f"<br>1点あたり: {amount:,}円 / 点数: {len(expanded)} / 行合計: {len(expanded)*amount:,}円</div>",
+                f"<div class='mini-box'><b>{idx}行目</b> : <code>{source}</code><br>"
+                f"→ <b>{len(expanded)}通り</b> ・1点 {amount:,}円<br>{preview_text}</div>",
                 unsafe_allow_html=True,
             )
+
+
+def main() -> None:
+    st.set_page_config(page_title="競馬トリガミ回避ツール", page_icon="🏇", layout="centered")
+    inject_mobile_css()
+    require_access()
+
+    render_top_hero("🏇 競馬トリガミ回避ツール", "スマホ向けに見やすく調整済みです。買い目の一括展開に対応し、ボタンを押した時だけ1回オッズ取得します。")
+
+    with st.expander("使い方 / 入力例", expanded=False):
+        st.markdown(
+            """
+            - 1行の末尾に購入額を書いてください。
+            - 1行で複数通りをまとめて入力できます。
+            - 例（三連複）: `1-2-3,4,5 300` → `1-2-3 / 1-2-4 / 1-2-5`
+            - 例（三連複フォーメーション）: `1,2-3,4-5,6 100`
+            - 例（馬連フォーメーション）: `1,2-3,4,5 500`
+            - 例（ALL対応）: `1-ALL 100` / `1-2-ALL 100`
+            - 例（単勝）: `3,5,8 100` → `3 / 5 / 8`
+            - 「netkeibaから1回取得」を押した時だけ対象ページへ1回アクセスします。
+            - 単勝・複勝は、馬番に対応する単勝列・複勝列から抽出します。
+            - 取得に失敗した場合でも、手動オッズ入力で判定できます。
+            """
+        )
+
+    if "last_odds_map" not in st.session_state:
+        st.session_state.last_odds_map = {}
+    if "last_fetch_url" not in st.session_state:
+        st.session_state.last_fetch_url = None
+    if "last_odds_display_map" not in st.session_state:
+        st.session_state.last_odds_display_map = {}
+
+    default_examples = {
+        "tansho": "3,5,8 100",
+        "fukusho": "3,5,8 100",
+        "umaren": "1,2-3,4,5 300\n1-ALL 100",
+        "wide": "1,2-3,4,5 300\n1-ALL 100",
+        "umatan": "1,2-3,4,5 300\n1-ALL 100",
+        "sanrenpuku": "1-2-3,4,5 300\n1,2-3,4-ALL 100",
+        "sanrentan": "1-2-3,4,5 300\n1,2-3,4-ALL 100",
+    }
+
+    with st.form("bet_form", clear_on_submit=False, enter_to_submit=False):
+        race_id = st.text_input("レースID", placeholder="例: 202609020611")
+        bankroll = st.number_input("軍資金（円）", min_value=100, step=100, value=3000)
+        max_horses = st.number_input("出走頭数（ALL用）", min_value=1, max_value=18, step=1, value=18, help="ALL を展開する時に使います。不明なら18のままでOKです。")
+        bet_type = st.selectbox("券種", list(BET_TYPE_LABELS.keys()), format_func=lambda x: BET_TYPE_LABELS[x])
+        st.info(REQUEST_GAP_NOTICE)
+
+        bets_text = st.text_area(
+            "買い目と購入額（1行で複数通り入力可 / 末尾に金額）",
+            placeholder=default_examples[bet_type],
+            height=150,
+            help="例: 1-2-3,4,5 300 / 1,2-3,4-5,6 100 / 1-ALL 100 / 3,5,8 100",
+        )
+        manual_odds_text = st.text_area(
+            "手動オッズ入力（任意。取得失敗時のフォールバック）",
+            placeholder="1-2-3 12.5\n1-2-4 10.8\n1-2-5 18.2",
+            height=130,
+            help="例: 1-2-3 12.5 / 1-2-4 10.8 / 1-2-5 18.2",
+        )
+
+        btn1, btn2 = st.columns(2)
+        with btn1:
+            fetch_clicked = st.form_submit_button("netkeibaから1回取得", type="primary", use_container_width=True)
+        with btn2:
+            calc_manual_clicked = st.form_submit_button("手動オッズだけで計算", use_container_width=True)
+
+    bets, bet_errors, previews = parse_bets(bets_text, bet_type, max_horses=int(max_horses))
+    manual_odds, manual_errors = parse_manual_odds(manual_odds_text, bet_type, max_horses=int(max_horses))
+
+    for err in bet_errors + manual_errors:
+        st.error(err)
+
+    if bets:
+        total_points = len(bets)
+        total_input_stake = sum(b.amount for b in bets)
         c1, c2 = st.columns(2)
-        c1.metric("合計点数", f"{total_points}点")
-        c2.metric("合計購入額", f"{total_amount:,}円")
+        c1.metric("展開後の点数", f"{total_points}点")
+        c2.metric("展開後の合計購入額", f"{total_input_stake:,}円")
+        render_preview(previews)
 
-    odds_map: Dict[str, float] = {}
-    odds_display_map: Dict[str, str] = {}
-    source_url = ""
-    scrape_note = None
+    odds_map: Dict[str, float] = dict(manual_odds)
+    odds_display_map: Dict[str, str] = {k: f"{v:.1f}" for k, v in manual_odds.items()}
 
+    if fetch_clicked:
+        if not race_id:
+            st.error("レースIDを入力してください。")
+        else:
+            try:
+                fetched_odds, fetched_odds_display, fetched_url, warning = scrape_netkeiba_odds(race_id=race_id, bet_type=bet_type)
+                st.session_state.last_odds_map = fetched_odds
+                st.session_state.last_odds_display_map = fetched_odds_display
+                st.session_state.last_fetch_url = fetched_url
+                odds_map.update(fetched_odds)
+                odds_display_map.update(fetched_odds_display)
+                if fetched_odds:
+                    st.success(f"取得完了: {len(fetched_odds)}件のオッズを抽出しました。")
+                else:
+                    st.warning("オッズを抽出できませんでした。手動オッズ入力を使ってください。")
+                st.caption(f"取得元: {fetched_url}")
+                if warning:
+                    st.warning(warning)
+            except Exception as exc:
+                st.error(f"取得に失敗しました: {exc}")
+                if manual_odds:
+                    st.info("手動オッズ入力を使って計算できます。")
+    elif st.session_state.last_odds_map:
+        odds_map.update(st.session_state.last_odds_map)
+        odds_display_map.update(st.session_state.last_odds_display_map)
+
+    if calc_manual_clicked or fetch_clicked:
+        if not bets:
+            st.warning("買い目がありません。")
+            return
+
+        
+    horse_map = {}
     if race_id.strip():
         try:
-            odds_map, odds_display_map, source_url, scrape_note = scrape_netkeiba_odds(race_id, bet_type)
-        except Exception as exc:
-            st.warning(f"netkeiba取得に失敗しました: {exc}")
-
-    if not odds_map and manual_odds_text.strip():
-        manual_map, manual_display, manual_errors = parse_manual_odds(manual_odds_text, bet_type, max_horses=int(max_horses))
-        if manual_errors:
-            for err in manual_errors:
-                st.error(err)
-            return
-        odds_map = manual_map
-        odds_display_map = manual_display
-
-    if source_url:
-        st.caption(f"取得元: {source_url}")
-    if scrape_note:
-        st.info(scrape_note)
+            horse_map = fetch_horse_names(race_id)
+        except:
+            horse_map = {}
 
     results, total_stake = calculate_results(bets, odds_map, odds_display_map)
-    c1, c2 = st.columns(2)
-    c1.metric("総購入額", f"{total_stake:,}円")
-    c2.metric("軍資金", f"{int(bankroll):,}円")
 
-    st.subheader("判定結果")
-    render_result_cards(results)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("総購入額", f"{total_stake:,}円")
+        c2.metric("軍資金", f"{int(bankroll):,}円")
+        trigami_count = sum(1 for r in results if r.is_trigami)
+        c3.metric("トリガミ件数", f"{trigami_count}件")
 
-    valid_results = [r for r in results if r.odds is not None]
-    if valid_results:
-        st.subheader("再配分案")
-        proposal, proposal_note = suggest_reallocation(int(bankroll), odds_map, bets)
-        if proposal:
-            st.info(proposal_note)
-            for sel, amount, odds, payout, profit in proposal:
-                st.markdown(
-                    f'<div class="mini-box"><b>{sel}</b><br>提案購入額: {amount:,}円 / オッズ: {odds:.1f}倍 / 払戻見込: {payout:,}円 / 収支: {profit:+,}円</div>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.warning(proposal_note)
-    else:
-        st.warning("有効なオッズが取得できていません。手動オッズ入力も試してください。")
+        if total_stake > bankroll:
+            st.warning("総購入額が軍資金を超えています。")
+
+        tab_cards, tab_table, tab_realloc = st.tabs(["見やすい表示", "表で見る", "再配分案"])
+
+        with tab_cards:
+            render_result_cards(results)
+            missing_count = sum(1 for r in results if r.odds is None)
+            if trigami_count:
+                st.warning(f"トリガミの買い目が {trigami_count} 件あります。")
+            else:
+                st.success("取得できた買い目についてはトリガミなしです。")
+            if missing_count:
+                st.info(f"オッズ未取得の買い目が {missing_count} 件あります。")
+
+        with tab_table:
+            rows = []
+            for r in results:
+        name = horse_map.get(r.selection, "")
+        display_selection = f"{r.selection} {name}" if name else r.selection
+                rows.append({
+                    "買い目": r.selection,
+                    "購入額": r.amount,
+                    "オッズ": r.odds_display if r.odds is not None else None,
+                    "払戻見込": r.payout,
+                    "収支": r.profit,
+                    "判定": "トリガミ" if r.is_trigami else ("OK" if r.is_trigami is False else "未判定"),
+                    "備考": r.note,
+                })
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        with tab_realloc:
+            proposal, message = suggest_reallocation(int(bankroll), odds_map, bets)
+            st.write(message)
+            if proposal:
+                total_proposal = sum(x[1] for x in proposal)
+                st.metric("提案総購入額", f"{total_proposal:,}円")
+                proposal_rows = []
+                for sel, amount, odds, payout, profit in proposal:
+                    proposal_rows.append({
+                        "買い目": sel,
+                        "提案購入額": amount,
+                        "オッズ": odds,
+                        "払戻見込": payout,
+                        "収支": profit,
+                    })
+                st.dataframe(proposal_rows, use_container_width=True, hide_index=True)
+
+    elif st.session_state.last_fetch_url:
+        st.caption(f"前回取得元: {st.session_state.last_fetch_url}")
 
 
 if __name__ == "__main__":
