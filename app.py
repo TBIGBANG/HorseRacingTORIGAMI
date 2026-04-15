@@ -415,25 +415,62 @@ def fetch_html(url: str) -> str:
 
 
 def fetch_horse_names(race_id: str) -> Dict[str, str]:
+    race_id = normalize_race_id(race_id)
+    if not race_id or len(race_id) != 12:
+        return {}
+
     url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
     try:
         html = fetch_html(url)
-    except:
+    except Exception:
         return {}
+
     soup = BeautifulSoup(html, "html.parser")
-    horse_map = {}
-    for tr in soup.select("tr"):
-        tds = tr.select("td")
-        if len(tds) < 3:
+    horse_map: Dict[str, str] = {}
+
+    for table in soup.select("table"):
+        rows = table.select("tr")
+        if len(rows) < 2:
             continue
-        nums = re.findall(r"^\d{1,2}$", tds[1].get_text(strip=True))
-        if not nums:
+
+        headers = [re.sub(r"\s+", "", c.get_text(" ", strip=True)) for c in rows[0].select("th,td")]
+        horse_idx = None
+        name_idx = None
+
+        for i, h in enumerate(headers):
+            if horse_idx is None and ("馬番" in h or h == "馬" or "馬番号" in h):
+                horse_idx = i
+            if name_idx is None and ("馬名" in h or "出走馬" in h):
+                name_idx = i
+
+        if horse_idx is None:
             continue
-        num = nums[0]
-        a = tr.select_one("a")
-        if a:
-            name = a.get_text(strip=True)
-            horse_map[num] = name
+
+        for tr in rows[1:]:
+            cells = tr.select("th,td")
+            if horse_idx >= len(cells):
+                continue
+
+            horse_text = cells[horse_idx].get_text(" ", strip=True)
+            if not re.fullmatch(r"\d{1,2}", horse_text):
+                continue
+            horse_no = str(int(horse_text))
+
+            horse_name = ""
+            if name_idx is not None and name_idx < len(cells):
+                a = cells[name_idx].select_one("a")
+                horse_name = a.get_text(" ", strip=True) if a else cells[name_idx].get_text(" ", strip=True)
+            else:
+                # fallback: use the longest anchor text in the row
+                anchors = [a.get_text(" ", strip=True) for a in tr.select("a")]
+                anchors = [a for a in anchors if a and not re.fullmatch(r"\d{1,2}", a)]
+                if anchors:
+                    horse_name = max(anchors, key=len)
+
+            horse_name = re.sub(r"\s+", " ", horse_name).strip()
+            if horse_name:
+                horse_map[horse_no] = horse_name
+
     return horse_map
 
 
@@ -888,7 +925,7 @@ def result_pill(result: BetResult) -> str:
     return '<span class="pill-na">未判定</span>'
 
 
-def render_result_cards(results: List[BetResult]) -> None:
+def render_result_cards(results: List[BetResult], horse_map: Dict[str, str]) -> None:
     for r in results:
         name = horse_map.get(r.selection, "")
         display_selection = f"{r.selection} {name}" if name else r.selection
@@ -1065,15 +1102,7 @@ def main() -> None:
             st.warning("買い目がありません。")
             return
 
-        
-    horse_map = {}
-    if race_id.strip():
-        try:
-            horse_map = fetch_horse_names(race_id)
-        except:
-            horse_map = {}
-
-    results, total_stake = calculate_results(bets, odds_map, odds_display_map)
+        results, total_stake = calculate_results(bets, odds_map, odds_display_map)
 
         c1, c2, c3 = st.columns(3)
         c1.metric("総購入額", f"{total_stake:,}円")
@@ -1087,7 +1116,7 @@ def main() -> None:
         tab_cards, tab_table, tab_realloc = st.tabs(["見やすい表示", "表で見る", "再配分案"])
 
         with tab_cards:
-            render_result_cards(results)
+            render_result_cards(results, horse_map)
             missing_count = sum(1 for r in results if r.odds is None)
             if trigami_count:
                 st.warning(f"トリガミの買い目が {trigami_count} 件あります。")
@@ -1099,8 +1128,6 @@ def main() -> None:
         with tab_table:
             rows = []
             for r in results:
-        name = horse_map.get(r.selection, "")
-        display_selection = f"{r.selection} {name}" if name else r.selection
                 rows.append({
                     "買い目": r.selection,
                     "購入額": r.amount,
