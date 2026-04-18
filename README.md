@@ -1,96 +1,14 @@
-# 競馬トリガミ回避ツール 公開版
+# 競馬オッズ確認ツール（クリーン版・Playwright対応）
 
-別Wi‑Fiやモバイル回線からでも使えるように、インターネット公開しやすい形にした Streamlit アプリです。
+この版は、まず netkeiba の `type=b1` ページから
+- 馬名
+- 単勝
+- 複勝
 
-## 追加したもの
-- Render / Railway / Streamlit Community Cloud に載せやすい構成
-- `Procfile`
-- `runtime.txt`
-- `.streamlit/config.toml`
-- 簡易アクセスコード機能（環境変数 `APP_PASSWORD`）
+が正しく取れるかだけを確認するための最小版です。
 
-## できること
-- レースID入力
-- 軍資金入力
-- 買い目入力
-- ボタン押下時だけ netkeiba の該当ページを1回取得
-- オッズ抽出
-- 買い目ごとの払戻見込とトリガミ判定
-- 必要なら購入額の再配分案
-- 取得失敗時の手動オッズ入力
+## Render 設定
 
-## 公開方法
-
-### 1) GitHub にアップロード
-このフォルダをそのまま GitHub リポジトリへ置きます。
-
-### 2) Render で公開
-- Render で New + > Web Service
-- GitHub リポジトリを選択
-- Build Command:
-
-```bash
-pip install -r requirements.txt
-```
-
-- Start Command:
-
-```bash
-streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-```
-
-- Environment Variables:
-  - `APP_PASSWORD` = 好きなアクセスコード
-
-公開後は、発行された `https://xxxxx.onrender.com` を開けば、別Wi‑Fiからでも使えます。
-
-### 3) Railway で公開
-- New Project > Deploy from GitHub
-- Variables に `APP_PASSWORD` を追加
-- Start command は次です
-
-```bash
-streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-```
-
-### 4) Streamlit Community Cloud
-そのまま載せられることがありますが、外部サイトへのアクセスやスクレイピング周りの制限で動作が不安定になる場合があります。安定性は Render / Railway の方が読みやすいです。
-
-## アクセスコード
-環境変数 `APP_PASSWORD` を設定すると、公開URLに入る前にコード入力を求めます。
-
-設定しない場合は誰でも開けます。
-
-## ローカル起動
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## 注意
-- netkeiba 側の HTML 構造や URL 形式が変わると取得できないことがあります。
-- 利用規約は各自で確認してください。
-- 公開サーバーからのスクレイピングは、自宅PCからのローカル利用より目立ちやすくなります。
-- 長時間の大量アクセスではなく、手動1回取得の前提を守ってください。
-
-
-## 追加セットアップ
-
-Playwright を使う場合は、初回だけ Chromium を入れてください。
-
-```bash
-playwright install chromium
-```
-
-
-## Render でのデプロイ（Playwright / Chromium 対応）
-
-この版は Render で Chromium までセットアップできるようにしてあります。
-
-### 方法1: render.yaml を使う
-リポジトリにこのままアップロードすれば、Render 側で `render.yaml` を読ませる運用ができます。
-
-### 方法2: Render 画面で手動設定する
 Build Command:
 ```bash
 bash render-build.sh
@@ -101,34 +19,7 @@ Start Command:
 streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
 ```
 
-### Build 時にやっていること
-- pip の更新
-- requirements.txt のインストール
-- Playwright Chromium のインストール
-- 依存ライブラリのインストール（可能な範囲）
-
-### 補足
-`python -m playwright install-deps chromium` は環境によって一部失敗することがあるため、
-ビルド全体を止めないように `|| true` を付けています。
-
-
-## GitHub ルート配置に合わせた Render 設定
-
-この版は **リポジトリ直下に `app.py` がある構成** です。  
-GitHub の `HorseRacingTORIGAMI/app.py` に合わせて、そのまま Render に載せやすい形にしています。
-
-### Render 手動設定
-Build Command:
-```bash
-bash render-build.sh
-```
-
-Start Command:
-```bash
-streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-```
-
-### 環境変数の例
+環境変数（任意）:
 ```text
-APP_PASSWORD=好きなアクセスコード
+PLAYWRIGHT_BROWSERS_PATH=0
 ```
