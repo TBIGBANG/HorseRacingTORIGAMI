@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-:
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
