@@ -770,7 +770,7 @@ def result_pill(result: BetResult) -> str:
 def render_result_cards(results: List[BetResult], horse_map: Dict[str, str]) -> None:
     for r in results:
         name = horse_map.get(r.selection, "")
-        display_selection = f"{display_selection} {name}" if name else r.selection
+        display_selection = f"{r.selection} {name}" if name else r.selection
         odds_text = f"{r.odds_display}倍" if r.odds is not None else "-"
         payout_text = f"{r.payout:,}円" if r.payout is not None else "-"
         profit_text = f"{r.profit:+,}円" if r.profit is not None else "-"
