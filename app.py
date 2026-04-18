@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -9,10 +10,9 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
-# Keep browser binaries in a stable project-local directory on Render.
 APP_DIR = Path(__file__).resolve().parent
 PLAYWRIGHT_DIR = APP_DIR / ".playwright"
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(PLAYWRIGHT_DIR))
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(PLAYWRIGHT_DIR)
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -35,6 +35,60 @@ def normalize_race_id(raw: str) -> str:
 
 def build_b1_url(race_id: str) -> str:
     return f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"
+
+
+def ensure_playwright_ready() -> None:
+    """
+    Render で browser executable が見つからない場合に備えて、
+    起動時にも Playwright browser を自己修復インストールする。
+    """
+    if sync_playwright is None:
+        raise RuntimeError("Playwright ライブラリ自体が読み込めません。requirements.txt を確認してください。")
+
+    PLAYWRIGHT_DIR.mkdir(parents=True, exist_ok=True)
+
+    def try_launch() -> bool:
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=["--disable-dev-shm-usage", "--no-sandbox", "--disable-gpu"],
+                )
+                browser.close()
+            return True
+        except Exception:
+            return False
+
+    if try_launch():
+        return
+
+    env = os.environ.copy()
+    env["PLAYWRIGHT_BROWSERS_PATH"] = str(PLAYWRIGHT_DIR)
+
+    # まずは全部入り install
+    subprocess.run(
+        ["python", "-m", "playwright", "install"],
+        env=env,
+        check=False,
+    )
+
+    if try_launch():
+        return
+
+    # 念のため chromium だけも再実行
+    subprocess.run(
+        ["python", "-m", "playwright", "install", "chromium"],
+        env=env,
+        check=False,
+    )
+
+    if try_launch():
+        return
+
+    raise RuntimeError(
+        f"Playwright browser の準備に失敗しました。"
+        f" PLAYWRIGHT_BROWSERS_PATH={PLAYWRIGHT_DIR}"
+    )
 
 
 def fetch_html_raw(url: str) -> str:
@@ -80,8 +134,7 @@ def fetch_html_raw(url: str) -> str:
 
 
 def fetch_html_rendered(url: str, timeout_ms: int = 20000) -> str:
-    if sync_playwright is None:
-        raise RuntimeError("Playwright が利用できません。ビルド設定を確認してください。")
+    ensure_playwright_ready()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(

@@ -6,4 +6,5 @@ export PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright"
 pip install --upgrade pip
 pip install -r requirements.txt
 
-python -m playwright install chromium
+# Install all default browsers metadata; this avoids missing headless-shell cases.
+python -m playwright install
