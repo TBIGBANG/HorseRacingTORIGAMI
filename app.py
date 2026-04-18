@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
 USER_AGENT = (
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
-    "Mobile/15E148 Safari/604.1"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
-TIMEOUT = 15
+TIMEOUT_SECONDS = 15
 
 
 def normalize_race_id(raw: str) -> str:
@@ -23,142 +22,126 @@ def build_sp_url(race_id: str) -> str:
     return f"https://race.sp.netkeiba.com/?pid=odds_view&type=b1&race_id={race_id}"
 
 
-def fetch_html(url: str) -> str:
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Referer": "https://race.sp.netkeiba.com/",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    }
-    r = requests.get(url, headers=headers, timeout=TIMEOUT)
-    r.raise_for_status()
-    raw = r.content
+def mojibake_score(text: str) -> int:
+    # Common mojibake markers seen in the uploaded files.
+    bad_tokens = ["„", "�", "Ē", "ŗ", "¤", "½", "¶", "Ć", "Š"]
+    return sum(text.count(tok) for tok in bad_tokens)
 
-    # mobile pages can be cp932 / EUC-JP / utf-8 depending on path and response
-    for enc in ["utf-8", "cp932", "shift_jis", "EUC-JP", r.apparent_encoding, r.encoding, "latin1"]:
-        if not enc:
-            continue
+
+def decode_html_bytes(raw: bytes, fallback_domain_hint: str = "sp") -> str:
+    """
+    Prefer EUC-JP first for the SP page because the uploaded HTML head declares it.
+    The uploaded SP head shows <meta charset="EUC-JP"> fileciteturn10file8
+    """
+    # Inspect ASCII-safe head first
+    head_ascii = raw[:4096].decode("ascii", errors="ignore")
+    meta_euc = 'charset="EUC-JP"' in head_ascii or 'charset=EUC-JP' in head_ascii
+
+    candidates: List[str] = []
+    if meta_euc or fallback_domain_hint == "sp":
+        candidates = ["euc_jp", "cp932", "shift_jis", "utf-8", "latin1"]
+    else:
+        candidates = ["utf-8", "cp932", "shift_jis", "euc_jp", "latin1"]
+
+    best_text = ""
+    best_score = 10**9
+
+    for enc in candidates:
         try:
-            text = raw.decode(enc)
-            # prefer decoding that does not produce replacement characters
-            if "�" not in text[:3000]:
-                return text
+            txt = raw.decode(enc)
+            score = mojibake_score(txt)
+            # Strongly prefer readable Japanese over mojibake
+            if score < best_score:
+                best_text = txt
+                best_score = score
         except Exception:
             pass
 
-    for enc in ["utf-8", "cp932", "shift_jis", "EUC-JP", "latin1"]:
-        try:
-            return raw.decode(enc, errors="replace")
-        except Exception:
-            pass
+    if best_text:
+        return best_text
 
     return raw.decode("utf-8", errors="replace")
 
 
-def clean_text(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip()
+def fetch_html(race_id: str) -> Tuple[str, str]:
+    url = build_sp_url(race_id)
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        "Referer": "https://race.netkeiba.com/",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+    r = requests.get(url, headers=headers, timeout=TIMEOUT_SECONDS)
+    r.raise_for_status()
+    html = decode_html_bytes(r.content, fallback_domain_hint="sp")
+    return url, html
 
 
-def parse_float_text(s: str) -> str:
-    m = re.search(r"\d+(?:\.\d+)?", s or "")
-    return m.group(0) if m else ""
-
-
-def parse_range_text(s: str) -> str:
-    s = (s or "").replace("〜", "-").replace("～", "-").replace("―", "-").replace("–", "-").replace("−", "-")
-    m = re.search(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", s)
-    return f"{float(m.group(1)):.1f} - {float(m.group(2)):.1f}" if m else ""
-
-
-def extract_horse_no_from_row(row) -> Optional[str]:
-    nums: List[str] = []
-    for cell in row.select("td,th,span,div"):
-        txt = clean_text(cell.get_text(" ", strip=True))
-        if re.fullmatch(r"\d{1,2}", txt):
-            n = int(txt)
-            if 1 <= n <= 18:
-                nums.append(str(n))
-    if not nums:
-        return None
-    # usually 2nd numeric token is horse number (1st can be 枠)
-    return nums[1] if len(nums) >= 2 else nums[0]
-
-
-def extract_name_from_row(row) -> str:
-    # preferred selectors
-    for sel in [".Horse_Name", ".horse_name", "[class*='Horse_Name']", "[class*='horse_name']"]:
-        node = row.select_one(sel)
-        if node:
-            txt = clean_text(node.get_text(" ", strip=True))
-            if txt and not re.search(r"\d", txt):
-                return txt
-
-    # fallback: longest non-numeric text in row
-    candidates = []
-    for cell in row.select("td,th,a,span,div"):
-        txt = clean_text(cell.get_text(" ", strip=True))
-        if txt and not re.search(r"\d", txt) and len(txt) >= 2:
-            candidates.append(txt)
-    return max(candidates, key=len) if candidates else ""
-
-
-def parse_sp_rows(html: str) -> List[Dict[str, str]]:
+def parse_rows(html: str) -> Tuple[List[Dict[str, str]], Dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
-    merged: Dict[str, Dict[str, str]] = {}
+    items: Dict[str, Dict[str, str]] = {}
 
-    # pass 1: explicit odds ids if they exist
-    for row in soup.select("tr"):
-        horse_no = extract_horse_no_from_row(row)
-        if not horse_no:
+    # Primary: parse rows from RaceOdds_HorseList_Table
+    for tr in soup.select("table.RaceOdds_HorseList_Table tr"):
+        name_cell = tr.select_one(".Horse_Name")
+        if name_cell is None:
             continue
 
-        name = extract_name_from_row(row)
-        if horse_no not in merged:
-            merged[horse_no] = {"馬番": horse_no, "馬名": "", "単勝": "", "複勝": ""}
-        if name and (not merged[horse_no]["馬名"] or "�" in merged[horse_no]["馬名"]):
-            merged[horse_no]["馬名"] = name
+        horse_no: Optional[int] = None
 
-        win_node = row.select_one(f"[id='odds-1_{int(horse_no):02d}']")
+        odds_span = tr.select_one("span[id^='odds-1_'], span[id^='odds-2_']")
+        if odds_span is not None:
+            m = re.search(r"odds-\d+_(\d{1,2})$", odds_span.get("id", ""))
+            if m:
+                horse_no = int(m.group(1))
+
+        if horse_no is None:
+            nums: List[int] = []
+            for cell in tr.select("td,th"):
+                txt = cell.get_text(" ", strip=True)
+                if re.fullmatch(r"\d{1,2}", txt):
+                    n = int(txt)
+                    if 1 <= n <= 18:
+                        nums.append(n)
+            if len(nums) >= 2:
+                horse_no = nums[1]
+            elif len(nums) == 1:
+                horse_no = nums[0]
+
+        if horse_no is None:
+            continue
+
+        key = str(horse_no)
+        row = items.setdefault(key, {"馬番": key, "馬名": "", "単勝": "", "複勝": ""})
+
+        horse_name = re.sub(r"\s+", " ", name_cell.get_text(" ", strip=True)).strip()
+        if horse_name:
+            row["馬名"] = horse_name
+
+        win_node = tr.select_one(f"span[id='odds-1_{horse_no:02d}']")
         if win_node is not None:
-            win = parse_float_text(clean_text(win_node.get_text(" ", strip=True)))
-            if win and win != "---":
-                merged[horse_no]["単勝"] = win
+            win_text = win_node.get_text(" ", strip=True)
+            if win_text and win_text != "---.-":
+                row["単勝"] = win_text
 
-        place_node = row.select_one(f"[id='odds-2_{int(horse_no):02d}']")
+        place_node = tr.select_one(f"span[id='odds-2_{horse_no:02d}']")
         if place_node is not None:
-            place = parse_range_text(clean_text(place_node.get_text(" ", strip=True)))
-            if place:
-                merged[horse_no]["複勝"] = place
+            place_text = place_node.get_text(" ", strip=True)
+            if place_text and place_text != "---.-":
+                row["複勝"] = place_text
 
-    # pass 2: global id scan fallback
-    for node in soup.select("[id^='odds-1_']"):
-        m = re.search(r"odds-1_(\d{1,2})$", node.get("id", ""))
-        if not m:
-            continue
-        horse_no = str(int(m.group(1)))
-        merged.setdefault(horse_no, {"馬番": horse_no, "馬名": "", "単勝": "", "複勝": ""})
-        win = parse_float_text(clean_text(node.get_text(" ", strip=True)))
-        if win and win != "---":
-            merged[horse_no]["単勝"] = win
-
-    for node in soup.select("[id^='odds-2_']"):
-        m = re.search(r"odds-2_(\d{1,2})$", node.get("id", ""))
-        if not m:
-            continue
-        horse_no = str(int(m.group(1)))
-        merged.setdefault(horse_no, {"馬番": horse_no, "馬名": "", "単勝": "", "複勝": ""})
-        place = parse_range_text(clean_text(node.get_text(" ", strip=True)))
-        if place:
-            merged[horse_no]["複勝"] = place
-
-    rows = sorted(merged.values(), key=lambda x: int(x["馬番"]))
-    return rows
+    rows = sorted(items.values(), key=lambda x: int(x["馬番"]))
+    debug = {
+        "row_count": str(len(rows)),
+        "mojibake_score": str(mojibake_score(html)),
+    }
+    return rows, debug
 
 
-st.set_page_config(page_title="SP版オッズ取得 修正版", page_icon="🏇", layout="centered")
-st.title("SP版オッズ取得 修正版")
-st.caption("文字化け対策と重複排除を入れた版です。")
+st.set_page_config(page_title="SP版オッズ取得", page_icon="🏇", layout="centered")
+st.title("SP版オッズ取得")
+st.caption("文字コード対策版。SPページは EUC-JP を優先して読みます。")
 
 race_id = st.text_input("レースID", placeholder="例: 202609020611")
 
@@ -169,25 +152,23 @@ if st.button("取得", type="primary"):
         st.error("12桁のレースIDを入力してください。")
         st.stop()
 
-    url = build_sp_url(race_id)
-
     try:
-        html = fetch_html(url)
-        data = parse_sp_rows(html)
+        url, html = fetch_html(race_id)
+        rows, debug = parse_rows(html)
 
         st.caption(f"取得元: {url}")
-        st.write(f"抽出件数: {len(data)}")
 
-        if not data:
+        if not rows:
             st.error("取得失敗")
-        else:
-            st.dataframe(data, use_container_width=True, hide_index=True)
+            with st.expander("HTML先頭確認", expanded=True):
+                st.code(html[:4000])
+            st.stop()
 
-            no_odds = [r for r in data if not r["単勝"] and not r["複勝"]]
-            if no_odds:
-                st.warning(f"オッズ未取得の馬が {len(no_odds)} 頭あります。")
-                with st.expander("HTML先頭確認", expanded=False):
-                    st.code(html[:5000])
+        st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    except Exception as e:
-        st.error(str(e))
+        with st.expander("デバッグ情報", expanded=False):
+            st.json(debug)
+            st.code(html[:2000])
+
+    except Exception as exc:
+        st.error(f"注意エラー: {exc}")
