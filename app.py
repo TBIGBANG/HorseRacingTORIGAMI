@@ -416,12 +416,13 @@ def fetch_html(url: str) -> str:
         return response.text
 
 
+
 def fetch_horse_names(race_id: str) -> Dict[str, str]:
     race_id = normalize_race_id(race_id)
     if not race_id or len(race_id) != 12:
         return {}
 
-    url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
+    url = f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"
     try:
         html = fetch_html(url)
     except Exception:
@@ -430,256 +431,30 @@ def fetch_horse_names(race_id: str) -> Dict[str, str]:
     soup = BeautifulSoup(html, "html.parser")
     horse_map: Dict[str, str] = {}
 
-    for table in soup.select("table"):
+    for table in soup.select("table.RaceOdds_HorseList_Table"):
         rows = table.select("tr")
         if len(rows) < 2:
             continue
 
-        headers = [re.sub(r"\s+", "", c.get_text(" ", strip=True)) for c in rows[0].select("th,td")]
-        horse_idx = None
-        name_idx = None
-
-        for i, h in enumerate(headers):
-            if horse_idx is None and ("馬番" in h or h == "馬" or "馬番号" in h):
-                horse_idx = i
-            if name_idx is None and ("馬名" in h or "出走馬" in h):
-                name_idx = i
-
-        if horse_idx is None:
-            continue
-
         for tr in rows[1:]:
-            cells = tr.select("th,td")
-            if horse_idx >= len(cells):
+            cells = tr.select("td")
+            if len(cells) < 6:
                 continue
 
-            horse_text = cells[horse_idx].get_text(" ", strip=True)
-            if not re.fullmatch(r"\d{1,2}", horse_text):
+            horse_no_text = cells[1].get_text(" ", strip=True)
+            if not re.fullmatch(r"\d{1,2}", horse_no_text):
                 continue
-            horse_no = str(int(horse_text))
 
-            horse_name = ""
-            if name_idx is not None and name_idx < len(cells):
-                a = cells[name_idx].select_one("a")
-                horse_name = a.get_text(" ", strip=True) if a else cells[name_idx].get_text(" ", strip=True)
-            else:
-                # fallback: use the longest anchor text in the row
-                anchors = [a.get_text(" ", strip=True) for a in tr.select("a")]
-                anchors = [a for a in anchors if a and not re.fullmatch(r"\d{1,2}", a)]
-                if anchors:
-                    horse_name = max(anchors, key=len)
+            horse_no = str(int(horse_no_text))
+            name_cell = tr.select_one(".Horse_Name")
+            if name_cell is None:
+                name_cell = cells[4]
 
-            horse_name = re.sub(r"\s+", " ", horse_name).strip()
+            horse_name = re.sub(r"\s+", " ", name_cell.get_text(" ", strip=True)).strip()
             if horse_name:
                 horse_map[horse_no] = horse_name
 
     return horse_map
-
-
-def likely_odds_value(value: str) -> Optional[float]:
-    txt = value.strip().replace(",", "")
-    if not re.fullmatch(r"\d{1,5}(?:\.\d{1,2})?", txt):
-        return None
-    num = float(txt)
-    if num <= 0:
-        return None
-    return num
-
-
-
-def extract_selection_from_text(text: str, bet_type: str, field_size: Optional[int] = None) -> Optional[str]:
-    raw_nums = re.findall(r"(?<!\d)\d{1,2}(?!\d)", text)
-    if field_size is not None:
-        nums = [n for n in raw_nums if 1 <= int(n) <= field_size]
-    else:
-        nums = raw_nums
-    need = expected_selection_len(bet_type)
-    if len(nums) < need:
-        return None
-    return normalize_selection("-".join(nums[:need]), bet_type)
-
-
-def detect_field_size(html: str) -> Optional[int]:
-    """Try to infer runner count from race/odds pages before parsing odds grids."""
-    soup = BeautifulSoup(html, "html.parser")
-
-    selector_candidates = [
-        ".RaceTableArea td[class*='Umaban']",
-        ".RaceTableArea span[class*='Umaban']",
-        ".Shutuba_Table td[class*='Umaban']",
-        ".Shutuba_Table span[class*='Umaban']",
-        "table td[class*='Umaban']",
-        "table span[class*='Umaban']",
-        "[class*='Horse_Num']",
-        "[class*='umaban']",
-    ]
-    values = []
-    for sel in selector_candidates:
-        for node in soup.select(sel):
-            txt = node.get_text(" ", strip=True)
-            if re.fullmatch(r"\d{1,2}", txt):
-                values.append(int(txt))
-
-    if values:
-        uniq = sorted(set(v for v in values if 1 <= v <= 18))
-        if uniq:
-            return max(uniq)
-
-    text = soup.get_text("\n", strip=True)
-    patterns = [
-        r"(\d{1,2})頭",
-        r"出走\D{0,4}(\d{1,2})頭",
-        r"立て\D{0,2}(\d{1,2})頭",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text)
-        if m:
-            n = int(m.group(1))
-            if 1 <= n <= 18:
-                return n
-
-    nums = [int(n) for n in re.findall(r"(?<!\d)(?:[1-9]|1[0-8])(?!\d)", text)]
-    if nums:
-        freq = {}
-        for n in nums:
-            freq[n] = freq.get(n, 0) + 1
-        dense = [n for n, c in freq.items() if c >= 2]
-        if len(dense) >= 6:
-            return max(dense)
-    return None
-
-
-def build_race_context_urls(race_id: str) -> List[str]:
-    urls = [
-        f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}",
-        f"https://race.netkeiba.com/race/result.html?race_id={race_id}",
-        f"https://race.netkeiba.com/race/odds.html?race_id={race_id}",
-        f"https://race.netkeiba.com/odds/index.html?race_id={race_id}",
-    ]
-    seen = set()
-    out = []
-    for u in urls:
-        if u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
-
-
-
-def detect_odds_column_indexes(table) -> List[int]:
-    indexes: List[int] = []
-    rows = table.select("tr")
-    for tr in rows[:6]:
-        cells = tr.select("th,td")
-        if not cells:
-            continue
-        headers = [c.get_text(" ", strip=True) for c in cells]
-        for idx, header in enumerate(headers):
-            normalized = re.sub(r"\s+", "", header)
-            if "オッズ" in normalized:
-                indexes.append(idx)
-        if indexes:
-            break
-    return sorted(set(indexes))
-
-
-def extract_odds_from_cell(cell) -> Optional[float]:
-    candidates = []
-    for attr in ["data-rate", "data-odds", "data-value", "aria-label", "title"]:
-        val = cell.attrs.get(attr)
-        if isinstance(val, str):
-            candidates.append(val)
-    candidates.append(cell.get_text(" ", strip=True))
-
-    for raw in candidates:
-        nums = re.findall(r"\d{1,5}(?:\.\d{1,2})?", raw.replace(",", ""))
-        for num in nums:
-            cand = likely_odds_value(num)
-            if cand is not None:
-                return cand
-    return None
-
-
-def extract_odds_candidates_from_tables(html: str, bet_type: str, field_size: Optional[int] = None) -> Dict[str, float]:
-    soup = BeautifulSoup(html, "html.parser")
-    odds_map: Dict[str, float] = {}
-
-    # まず「オッズ」列を見つけ、その列の数値だけを使う
-    for table in soup.select("table"):
-        odds_indexes = detect_odds_column_indexes(table)
-        rows = table.select("tr")
-        if not odds_indexes or not rows:
-            continue
-
-        for tr in rows:
-            cells = tr.select("th,td")
-            if len(cells) < 2:
-                continue
-            joined = " ".join(c.get_text(" ", strip=True) for c in cells)
-            selection = extract_selection_from_text(joined, bet_type, field_size=field_size)
-            if not selection:
-                continue
-
-            odds = None
-            for idx in odds_indexes:
-                if idx >= len(cells):
-                    continue
-                odds = extract_odds_from_cell(cells[idx])
-                if odds is not None:
-                    break
-
-            if odds is not None:
-                odds_map.setdefault(selection, odds)
-
-    if odds_map:
-        return odds_map
-
-    # セル自体に「オッズ」ラベルが付いているケースに対応
-    for table in soup.select("table"):
-        for tr in table.select("tr"):
-            cells = tr.select("th,td")
-            if len(cells) < 2:
-                continue
-            joined = " ".join(c.get_text(" ", strip=True) for c in cells)
-            selection = extract_selection_from_text(joined, bet_type, field_size=field_size)
-            if not selection:
-                continue
-
-            odds = None
-            for cell in cells:
-                meta = " ".join(
-                    str(cell.attrs.get(k, ""))
-                    for k in ["data-label", "aria-label", "title", "class"]
-                )
-                if "オッズ" in meta or "odds" in meta.lower():
-                    odds = extract_odds_from_cell(cell)
-                    if odds is not None:
-                        break
-
-            if odds is not None:
-                odds_map.setdefault(selection, odds)
-
-    if odds_map:
-        return odds_map
-
-    # 最後の保険: テキストから「オッズ」の近くの数値だけ拾う
-    text = soup.get_text("\n", strip=True)
-    for line in text.splitlines():
-        if "オッズ" not in line:
-            continue
-        selection = extract_selection_from_text(line, bet_type, field_size=field_size)
-        if not selection:
-            continue
-        tail = line.split("オッズ", 1)[-1]
-        nums = re.findall(r"\d{1,5}(?:\.\d{1,2})?", tail)
-        for raw in nums:
-            cand = likely_odds_value(raw)
-            if cand is not None:
-                odds_map.setdefault(selection, cand)
-                break
-
-    return odds_map
-
 
 
 def parse_win_place_table(html: str) -> Tuple[Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, str]]:
