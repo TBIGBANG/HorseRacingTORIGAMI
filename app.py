@@ -725,6 +725,57 @@ def parse_win_place_table(html: str) -> Tuple[Dict[str, float], Dict[str, str], 
     return win_map, win_display, place_map, place_display
 
 
+
+
+def extract_odds_from_cell(cell) -> Optional[float]:
+    candidates = []
+    for attr in ["data-rate", "data-odds", "data-value", "aria-label", "title"]:
+        val = cell.attrs.get(attr)
+        if isinstance(val, str):
+            candidates.append(val)
+    candidates.append(cell.get_text(" ", strip=True))
+
+    for raw in candidates:
+        nums = re.findall(r"\d{1,5}(?:\.\d{1,2})?", raw.replace(",", ""))
+        for num in nums:
+            cand = likely_odds_value(num)
+            if cand is not None:
+                return cand
+    return None
+
+
+def extract_odds_candidates_from_tables(html: str, bet_type: str, field_size: Optional[int] = None) -> Dict[str, float]:
+    soup = BeautifulSoup(html, "html.parser")
+    odds_map: Dict[str, float] = {}
+
+    for table in soup.select("table"):
+        odds_indexes = detect_odds_column_indexes(table)
+        rows = table.select("tr")
+        if not odds_indexes or not rows:
+            continue
+
+        for tr in rows:
+            cells = tr.select("th,td")
+            if len(cells) < 2:
+                continue
+
+            joined = " ".join(c.get_text(" ", strip=True) for c in cells)
+            selection = extract_selection_from_text(joined, bet_type, field_size=field_size)
+            if not selection:
+                continue
+
+            odds = None
+            for idx in odds_indexes:
+                if idx >= len(cells):
+                    continue
+                odds = extract_odds_from_cell(cells[idx])
+                if odds is not None:
+                    break
+
+            if odds is not None:
+                odds_map.setdefault(selection, odds)
+
+    return odds_map
 def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float], Dict[str, str], str, Optional[str]]:
     race_id = normalize_race_id(race_id)
     if not race_id or len(race_id) != 12:
