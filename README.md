@@ -1,27 +1,16 @@
-# 競馬オッズ確認ツール（Playwright 自己修復版）
+# 競馬オッズ確認ツール（超軽量版）
 
-Render 設定:
+この版は Playwright を使いません。  
+`odds_get_form.html?type=b1&race_id=...` を直接取得して、単勝・複勝を解析します。
+
+## Render 設定
 
 Build Command:
 ```bash
-bash render-build.sh
+pip install -r requirements.txt
 ```
 
 Start Command:
 ```bash
-bash render-start.sh
+streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
 ```
-
-この版は:
-- `.playwright/` に browser を固定
-- Build 時に `python -m playwright install`
-- 実行時にも不足していたら自己修復インストール
-
-
-## タイムアウト対策
-この版では `Page.goto(..., wait_until="domcontentloaded")` をやめて、より軽い待機方式に変更しています。
-
-- 画像・広告・フォントなど重い通信をブロック
-- `goto` は `commit` までで先に進む
-- `odds_get_form.html?type=b1...` を優先取得
-- タイムアウトしても、その時点の DOM で解析

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: horse-racing-odds-checker
+    name: horse-racing-odds-light
     env: python
-    buildCommand: bash render-build.sh
-    startCommand: bash render-start.sh
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
