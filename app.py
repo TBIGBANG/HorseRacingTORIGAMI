@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 try:
-from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright
+except Exception:
+    sync_playwright = None
 with sync_playwright() as p:
 p.chromium.launch()
 except Exception:
@@ -29,6 +31,8 @@ os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
 def ensure_playwright_browser()
 try:
     from playwright.sync_api import sync_playwright
+except Exception:
+    sync_playwright = None
 except Exception:
     sync_playwright = None
 
@@ -916,6 +920,8 @@ try:
         for url in candidate_urls:
             last_url = url
 try:
+except Exception:
+    pass
                 html = fetch_html(url)
                 local_field_size = detected_field_size or detect_field_size(html)
                 win_map, win_display, place_map, place_display = parse_win_place_table(html)
