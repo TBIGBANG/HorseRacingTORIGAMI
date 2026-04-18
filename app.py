@@ -401,6 +401,7 @@ def build_odds_urls(race_id: str, bet_type: str) -> List[str]:
     return ordered
 
 
+
 def fetch_html(url: str) -> str:
     headers = {
         "User-Agent": USER_AGENT,
@@ -412,11 +413,39 @@ def fetch_html(url: str) -> str:
     with requests.Session() as session:
         response = session.get(url, headers=headers, timeout=TIMEOUT_SECONDS)
         response.raise_for_status()
-        response.encoding = response.apparent_encoding or response.encoding
-        return response.text
 
+        content_type = response.headers.get("Content-Type", "")
+        html_bytes = response.content
 
+        # netkeiba saved/uploaded pages can be EUC-JP. Prefer explicit charset if present.
+        m = re.search(r"charset=([A-Za-z0-9_\\-]+)", content_type, flags=re.I)
+        if m:
+            enc = m.group(1)
+            try:
+                return html_bytes.decode(enc, errors="replace")
+            except Exception:
+                pass
 
+        # Try meta charset in HTML head
+        head_text = html_bytes[:4096].decode("ascii", errors="ignore")
+        m = re.search(r'charset=["\\\']?([A-Za-z0-9_\\-]+)', head_text, flags=re.I)
+        if m:
+            enc = m.group(1)
+            try:
+                return html_bytes.decode(enc, errors="replace")
+            except Exception:
+                pass
+
+        # Fallbacks
+        for enc in [response.apparent_encoding, response.encoding, "EUC-JP", "utf-8", "cp932"]:
+            if not enc:
+                continue
+            try:
+                return html_bytes.decode(enc, errors="replace")
+            except Exception:
+                pass
+
+        return html_bytes.decode("latin1", errors="replace")
 
 
 def detect_field_size(html: str) -> Optional[int]:
@@ -452,6 +481,7 @@ def build_race_context_urls(race_id: str) -> List[str]:
         f"https://race.netkeiba.com/odds/index.html?race_id={race_id}",
         f"https://race.netkeiba.com/race/odds.html?race_id={race_id}",
     ]
+
 def fetch_horse_names(race_id: str) -> Dict[str, str]:
     race_id = normalize_race_id(race_id)
     if not race_id or len(race_id) != 12:
@@ -467,11 +497,7 @@ def fetch_horse_names(race_id: str) -> Dict[str, str]:
     horse_map: Dict[str, str] = {}
 
     for table in soup.select("table.RaceOdds_HorseList_Table"):
-        rows = table.select("tr")
-        if len(rows) < 2:
-            continue
-
-        for tr in rows[1:]:
+        for tr in table.select("tr")[1:]:
             cells = tr.select("td")
             if len(cells) < 6:
                 continue
@@ -490,6 +516,7 @@ def fetch_horse_names(race_id: str) -> Dict[str, str]:
                 horse_map[horse_no] = horse_name
 
     return horse_map
+
 
 
 def parse_win_place_table(html: str) -> Tuple[Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, str]]:
@@ -544,6 +571,8 @@ def parse_win_place_table(html: str) -> Tuple[Dict[str, float], Dict[str, str], 
             if len(cells) < 6:
                 continue
 
+            # Observed structure in uploaded HTML:
+            # [0]=枠 [1]=馬番 [2]=印 [3]=選択 [4]=馬名 [5]=オッズ
             horse_text = cells[1].get_text(" ", strip=True)
             if not re.fullmatch(r"\d{1,2}", horse_text):
                 continue
@@ -741,7 +770,7 @@ def result_pill(result: BetResult) -> str:
 def render_result_cards(results: List[BetResult], horse_map: Dict[str, str]) -> None:
     for r in results:
         name = horse_map.get(r.selection, "")
-        display_selection = f"{r.selection} {name}" if name else r.selection
+        display_selection = f"{display_selection} {name}" if name else r.selection
         odds_text = f"{r.odds_display}倍" if r.odds is not None else "-"
         payout_text = f"{r.payout:,}円" if r.payout is not None else "-"
         profit_text = f"{r.profit:+,}円" if r.profit is not None else "-"
