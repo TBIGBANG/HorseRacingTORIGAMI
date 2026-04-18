@@ -776,6 +776,44 @@ def extract_odds_candidates_from_tables(html: str, bet_type: str, field_size: Op
                 odds_map.setdefault(selection, odds)
 
     return odds_map
+
+def detect_odds_column_indexes(table) -> List[int]:
+    indexes: List[int] = []
+    rows = table.select("tr")
+    for tr in rows[:6]:
+        cells = tr.select("th,td")
+        if not cells:
+            continue
+        headers = [re.sub(r"\s+", "", c.get_text(" ", strip=True)) for c in cells]
+        for idx, header in enumerate(headers):
+            if "オッズ" in header:
+                indexes.append(idx)
+        if indexes:
+            break
+    return sorted(set(indexes))
+
+
+
+def likely_odds_value(value: str) -> Optional[float]:
+    txt = value.strip().replace(",", "")
+    if not re.fullmatch(r"\d{1,5}(?:\.\d{1,2})?", txt):
+        return None
+    num = float(txt)
+    if num <= 0:
+        return None
+    return num
+
+
+
+def extract_selection_from_text(text: str, bet_type: str, field_size: Optional[int] = None) -> Optional[str]:
+    raw_nums = re.findall(r"(?<!\d)\d{1,2}(?!\d)", text)
+    nums = [n for n in raw_nums if field_size is None or 1 <= int(n) <= field_size]
+    need = expected_selection_len(bet_type)
+    if len(nums) < need:
+        return None
+    return normalize_selection("-".join(nums[:need]), bet_type)
+
+
 def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float], Dict[str, str], str, Optional[str]]:
     race_id = normalize_race_id(race_id)
     if not race_id or len(race_id) != 12:
