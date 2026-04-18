@@ -386,6 +386,9 @@ def normalize_race_id(raw: str) -> str:
 
 
 def build_odds_urls(race_id: str, bet_type: str) -> List[str]:
+    if bet_type in {"tansho", "fukusho"}:
+        return [f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"]
+
     urls: List[str] = []
     for q in BET_TYPE_QUERY_TYPES.get(bet_type, []):
         urls.append(f"https://race.netkeiba.com/odds/index.html?type={q}&race_id={race_id}")
@@ -479,8 +482,6 @@ def build_race_context_urls(race_id: str) -> List[str]:
     return [
         f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}",
         f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}",
-        f"https://race.netkeiba.com/odds/index.html?race_id={race_id}",
-        f"https://race.netkeiba.com/race/odds.html?race_id={race_id}",
     ]
 
 
@@ -722,8 +723,7 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
     last_url = candidate_urls[0]
 
     if bet_type in {"tansho", "fukusho"}:
-        primary_url = f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"
-        candidate_urls = [primary_url] + [u for u in candidate_urls if u != primary_url]
+        candidate_urls = [f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"]
         for url in candidate_urls:
             last_url = url
             try:
