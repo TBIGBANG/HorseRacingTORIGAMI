@@ -12,6 +12,10 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from bs4 import BeautifulSoup
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    sync_playwright = None
 
 
 USER_AGENT = (
@@ -455,6 +459,58 @@ def fetch_html(url: str) -> str:
         return html_bytes.decode("latin1", errors="replace")
 
 
+
+
+def fetch_html_rendered(url: str, wait_selectors: Optional[List[str]] = None, timeout_ms: int = 15000) -> str:
+    """
+    Render the page in a real browser and wait until odds are inserted by JS.
+    """
+    if sync_playwright is None:
+        raise RuntimeError("Playwright が利用できません。requirements.txt を更新して再デプロイしてください。")
+
+    wait_selectors = wait_selectors or [
+        "span[id^='odds-1_']",
+        "span[id^='odds-2_']",
+        "#odds_view_form table.RaceOdds_HorseList_Table",
+    ]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(
+            user_agent=USER_AGENT,
+            viewport={"width": 1400, "height": 2200},
+            locale="ja-JP",
+        )
+        page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+
+        # Wait for at least one useful selector and non-empty odds text
+        found = False
+        for sel in wait_selectors:
+            try:
+                page.wait_for_selector(sel, timeout=timeout_ms)
+                found = True
+                break
+            except Exception:
+                pass
+
+        if found:
+            # Additional short wait to allow text insertion
+            page.wait_for_timeout(1200)
+
+            # If odds spans exist but are empty, wait a bit more
+            try:
+                for _ in range(10):
+                    texts = page.locator("span[id^='odds-1_'], span[id^='odds-2_']").all_text_contents()
+                    joined = " ".join(t.strip() for t in texts if t and t.strip())
+                    if re.search(r"\d+\.\d+|\d+\s*-\s*\d+", joined):
+                        break
+                    page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+        html = page.content()
+        browser.close()
+        return html
 def detect_field_size(html: str) -> Optional[int]:
     soup = BeautifulSoup(html, "html.parser")
     values: List[int] = []
@@ -848,6 +904,25 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
                 html = fetch_html(url)
                 local_field_size = detected_field_size or detect_field_size(html)
                 win_map, win_display, place_map, place_display = parse_win_place_table(html)
+
+                # If raw HTML didn't contain inserted odds, render with browser and wait for insertion
+                if not win_map and not place_map and "index.html?type=b1" in url:
+                    try:
+                        rendered_html = fetch_html_rendered(
+                            url,
+                            wait_selectors=[
+                                "span[id^='odds-1_']",
+                                "span[id^='odds-2_']",
+                                "#odds_tan_block table.RaceOdds_HorseList_Table",
+                                "#odds_view_form table.RaceOdds_HorseList_Table",
+                            ],
+                        )
+                        html = rendered_html
+                        local_field_size = detected_field_size or detect_field_size(html)
+                        win_map, win_display, place_map, place_display = parse_win_place_table(html)
+                    except Exception as render_exc:
+                        last_error = render_exc
+
                 if local_field_size:
                     win_map = {k: v for k, v in win_map.items() if int(k) <= local_field_size}
                     win_display = {k: v for k, v in win_display.items() if int(k) <= local_field_size}
@@ -858,6 +933,8 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
                     warning_parts = [f"認識頭数: {local_field_size}頭"] if local_field_size else []
                     if "odds_get_form.html" in url:
                         warning_parts.append("AJAX用オッズ断片から取得しました。")
+                    elif "index.html?type=b1" in url:
+                        warning_parts.append("ブラウザ描画後のHTMLから取得しました。")
                     return win_map, win_display, url, " / ".join(warning_parts) if warning_parts else None
 
                 if bet_type == "fukusho" and place_map:
@@ -866,6 +943,8 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
                         warning_parts.insert(0, f"認識頭数: {local_field_size}頭")
                     if "odds_get_form.html" in url:
                         warning_parts.append("AJAX用オッズ断片から取得しました。")
+                    elif "index.html?type=b1" in url:
+                        warning_parts.append("ブラウザ描画後のHTMLから取得しました。")
                     return place_map, place_display, url, " / ".join(warning_parts)
             except Exception as exc:
                 last_error = exc
