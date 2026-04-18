@@ -554,6 +554,7 @@ def _detect_block_type(container, odds_span=None) -> Optional[str]:
     return None
 
 
+
 def fetch_horse_names(race_id: str) -> Dict[str, str]:
     race_id = normalize_race_id(race_id)
     if not race_id or len(race_id) != 12:
@@ -568,29 +569,54 @@ def fetch_horse_names(race_id: str) -> Dict[str, str]:
     soup = BeautifulSoup(html, "html.parser")
     horse_map: Dict[str, str] = {}
 
-    # Primary: odds tables
+    # Primary: rows in RaceOdds_HorseList_Table
     for row in soup.select("table.RaceOdds_HorseList_Table tr"):
         name_cell = row.select_one(".Horse_Name")
         if name_cell is None:
             continue
+
+        horse_no = None
+
+        # Prefer horse number from odds span suffix in the same row
         odds_span = row.select_one("span[id^='odds-1_'], span[id^='odds-2_']")
-        horse_no = _extract_horse_no_from_row(row, odds_span)
-        if not horse_no:
-            continue
-        horse_name = re.sub(r"\s+", " ", name_cell.get_text(" ", strip=True)).strip()
-        if horse_name:
-            horse_map[horse_no] = horse_name
+        if odds_span is not None:
+            span_id = odds_span.get("id", "")
+            m = re.search(r"odds-\d+_(\d{1,2})$", span_id)
+            if m:
+                horse_no = str(int(m.group(1)))
+
+        # Fallback: second numeric td in the row is usually 馬番
+        if horse_no is None:
+            nums = []
+            for cell in row.select("td,th"):
+                txt = cell.get_text(" ", strip=True)
+                if re.fullmatch(r"\d{1,2}", txt):
+                    n = int(txt)
+                    if 1 <= n <= 18:
+                        nums.append(str(n))
+            if len(nums) >= 2:
+                horse_no = nums[1]
+            elif len(nums) == 1:
+                horse_no = nums[0]
+
+        if horse_no:
+            horse_name = re.sub(r"\s+", " ", name_cell.get_text(" ", strip=True)).strip()
+            if horse_name:
+                horse_map[horse_no] = horse_name
 
     return horse_map
 
 
+
 def parse_win_place_table(html: str) -> Tuple[Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, str]]:
     """
-    Robust parser for PC type=b1 page.
-    Works even if wrappers shift slightly, as long as rows still contain:
-    - Horse_Name cell
-    - Odds cell/span
-    - odds-1_XX / odds-2_XX ids OR nearby 単勝/複勝 context
+    Robust parser for PC netkeiba type=b1 page.
+    Primary strategy:
+    - scan all spans with ids like odds-1_01 / odds-2_01 globally
+    - map horse number from id suffix
+    This is resilient even if wrappers or table nesting change slightly.
+    Secondary strategy:
+    - fall back to RaceOdds_HorseList_Table row parsing.
     """
     soup = BeautifulSoup(html, "html.parser")
     win_map: Dict[str, float] = {}
@@ -620,84 +646,81 @@ def parse_win_place_table(html: str) -> Tuple[Dict[str, float], Dict[str, str], 
             return val, f"{val:.1f}"
         return None, None
 
-    seen_rows = set()
+    # Primary: global scan by exact odds ids
+    for span in soup.select("span[id^='odds-1_']"):
+        span_id = span.get("id", "")
+        m = re.search(r"odds-1_(\d{1,2})$", span_id)
+        if not m:
+            continue
+        horse_no = str(int(m.group(1)))
+        txt = span.get_text(" ", strip=True)
+        nums = re.findall(r"\d+(?:\.\d+)?", txt.replace(",", ""))
+        if nums:
+            val = float(nums[0])
+            win_map[horse_no] = val
+            win_display[horse_no] = f"{val:.1f}"
 
-    # Primary strategy: iterate rows in RaceOdds_HorseList_Table
+    for span in soup.select("span[id^='odds-2_']"):
+        span_id = span.get("id", "")
+        m = re.search(r"odds-2_(\d{1,2})$", span_id)
+        if not m:
+            continue
+        horse_no = str(int(m.group(1)))
+        val, disp = parse_place_text(span.get_text(" ", strip=True))
+        if val is not None and disp is not None:
+            place_map[horse_no] = val
+            place_display[horse_no] = disp
+
+    if win_map or place_map:
+        return win_map, win_display, place_map, place_display
+
+    # Secondary fallback: row-based parse
     for row in soup.select("table.RaceOdds_HorseList_Table tr"):
-        cells = row.select("td,th")
-        if len(cells) < 2:
+        name_cell = row.select_one(".Horse_Name")
+        if name_cell is None:
             continue
 
-        name_cell = row.select_one(".Horse_Name")
-        odds_span = row.select_one("span[id^='odds-1_'], span[id^='odds-2_'], td.Odds span.Odds, .Odds span, span.Odds")
-        odds_cell = row.select_one("td.Odds, .Popular")
-        horse_no = _extract_horse_no_from_row(row, odds_span)
+        odds_span = row.select_one("span[id^='odds-1_'], span[id^='odds-2_'], span.Odds")
+        if odds_span is None:
+            continue
+
+        span_id = odds_span.get("id", "")
+        horse_no = None
+        block_type = None
+
+        m = re.search(r"odds-(1|2)_(\d{1,2})$", span_id)
+        if m:
+            block_type = "win" if m.group(1) == "1" else "place"
+            horse_no = str(int(m.group(2)))
+
+        if horse_no is None:
+            nums = []
+            for cell in row.select("td,th"):
+                txt = cell.get_text(" ", strip=True)
+                if re.fullmatch(r"\d{1,2}", txt):
+                    n = int(txt)
+                    if 1 <= n <= 18:
+                        nums.append(str(n))
+            if len(nums) >= 2:
+                horse_no = nums[1]
+            elif len(nums) == 1:
+                horse_no = nums[0]
+
         if not horse_no:
             continue
 
-        block_type = _detect_block_type(row, odds_span)
-        if not block_type:
-            # infer from row text: range => place, otherwise win
-            probe = ""
-            if odds_span is not None:
-                probe = odds_span.get_text(" ", strip=True)
-            elif odds_cell is not None:
-                probe = odds_cell.get_text(" ", strip=True)
-            block_type = "place" if re.search(r"\d+(?:\.\d+)?\s*[-〜～―–−]\s*\d+(?:\.\d+)?", probe) else "win"
-
-        odds_text = ""
-        if odds_span is not None:
-            odds_text = odds_span.get_text(" ", strip=True)
-        elif odds_cell is not None:
-            odds_text = odds_cell.get_text(" ", strip=True)
+        odds_text = odds_span.get_text(" ", strip=True)
+        if block_type == "place" or re.search(r"\d+(?:\.\d+)?\s*[-〜～―–−]\s*\d+(?:\.\d+)?", odds_text):
+            val, disp = parse_place_text(odds_text)
+            if val is not None and disp is not None:
+                place_map[horse_no] = val
+                place_display[horse_no] = disp
         else:
-            # fallback: last cell text if row has Horse_Name
-            if name_cell is not None and cells:
-                odds_text = cells[-1].get_text(" ", strip=True)
-
-        if not odds_text:
-            continue
-
-        row_key = (block_type, horse_no)
-        if row_key in seen_rows:
-            continue
-        seen_rows.add(row_key)
-
-        if block_type == "win":
             nums = re.findall(r"\d+(?:\.\d+)?", odds_text.replace(",", ""))
             if nums:
                 val = float(nums[0])
                 win_map[horse_no] = val
                 win_display[horse_no] = f"{val:.1f}"
-        else:
-            val, disp = parse_place_text(odds_text)
-            if val is not None and disp is not None:
-                place_map[horse_no] = val
-                place_display[horse_no] = disp
-
-    # Secondary fallback: direct id scan if rows changed a lot
-    if not win_map:
-        for span in soup.select("span[id^='odds-1_']"):
-            m = re.search(r"odds-1_(\d{1,2})$", span.get("id", ""))
-            if not m:
-                continue
-            horse_no = str(int(m.group(1)))
-            nums = re.findall(r"\d+(?:\.\d+)?", span.get_text(" ", strip=True).replace(",", ""))
-            if nums:
-                val = float(nums[0])
-                win_map[horse_no] = val
-                win_display[horse_no] = f"{val:.1f}"
-
-    if not place_map:
-        for span in soup.select("span[id^='odds-2_']"):
-            m = re.search(r"odds-2_(\d{1,2})$", span.get("id", ""))
-            if not m:
-                continue
-            horse_no = str(int(m.group(1)))
-            val, disp = parse_place_text(span.get_text(" ", strip=True))
-            if val is not None and disp is not None:
-                place_map[horse_no] = val
-                place_display[horse_no] = disp
 
     return win_map, win_display, place_map, place_display
 
