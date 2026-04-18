@@ -1,8 +1,7 @@
+from __future__ import annotations
 
 import os
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
-
-def ensure_playwright_browser():
+:
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -13,7 +12,6 @@ def ensure_playwright_browser():
 
 ensure_playwright_browser()
 
-from __future__ import annotations
 
 import itertools
 import math
@@ -27,6 +25,9 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from bs4 import BeautifulSoup
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
+def ensure_playwright_browser()
 try:
     from playwright.sync_api import sync_playwright
 except Exception:
