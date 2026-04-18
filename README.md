@@ -1,7 +1,8 @@
-# 競馬オッズ確認ツール（超軽量版）
+# 競馬オッズAPI確認ツール
 
-この版は Playwright を使いません。  
-`odds_get_form.html?type=b1&race_id=...` を直接取得して、単勝・複勝を解析します。
+この版は HTML の `---.-` を読むのではなく、
+JS が参照している `https://race.netkeiba.com/api/api_get_jra_odds.html`
+を直接呼んでオッズを取りに行きます。
 
 ## Render 設定
 
