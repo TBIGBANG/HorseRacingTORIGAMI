@@ -4,11 +4,13 @@ import itertools
 import math
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from bs4 import BeautifulSoup
 
 
@@ -679,91 +681,92 @@ def extract_odds_candidates_from_tables(html: str, bet_type: str, field_size: Op
     return odds_map
 
 
+
 def parse_win_place_table(html: str) -> Tuple[Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, str]]:
+    """
+    Parse PC netkeiba type=b1 odds page using the actual DOM structure:
+    - 単勝 block:  #odds_tan_block .RaceOdds_HorseList_Table
+    - 複勝 block:  #odds_fuku_block .RaceOdds_HorseList_Table
+    - 単勝 odds id: odds-1_XX
+    - 複勝 odds id: odds-2_XX
+    """
     soup = BeautifulSoup(html, "html.parser")
     win_map: Dict[str, float] = {}
     win_display: Dict[str, str] = {}
     place_map: Dict[str, float] = {}
     place_display: Dict[str, str] = {}
 
-    def clean_header(s: str) -> str:
-        return re.sub(r"\s+", "", s)
-
     def parse_place_text(raw: str) -> Tuple[Optional[float], Optional[str]]:
-        raw = raw.replace("〜", "-").replace("～", "-").replace("―", "-").replace("–", "-")
+        raw = (
+            (raw or "")
+            .replace(",", "")
+            .replace("〜", "-")
+            .replace("～", "-")
+            .replace("―", "-")
+            .replace("–", "-")
+            .replace("−", "-")
+            .strip()
+        )
         nums = re.findall(r"\d+(?:\.\d+)?", raw)
         if not nums:
             return None, None
         if len(nums) >= 2:
-            low = float(nums[0]); high = float(nums[1])
+            low = float(nums[0])
+            high = float(nums[1])
             return low, f"{low:.1f}-{high:.1f}"
         val = float(nums[0])
         return val, f"{val:.1f}"
 
-    for table in soup.select("table"):
-        rows = table.select("tr")
-        if not rows:
-            continue
+    def parse_single_odds_block(block_id: str, odds_prefix: str, is_place: bool) -> Tuple[Dict[str, float], Dict[str, str]]:
+        block = soup.select_one(f"#{block_id}")
+        if not block:
+            return {}, {}
 
-        headers = [clean_header(c.get_text(" ", strip=True)) for c in rows[0].select("th,td")]
-        horse_idx = win_idx = place_idx = None
+        table = block.select_one("table.RaceOdds_HorseList_Table")
+        if not table:
+            return {}, {}
 
-        for idx, h in enumerate(headers):
-            if horse_idx is None and ("馬番" in h or h == "馬" or "馬番号" in h):
-                horse_idx = idx
-            if win_idx is None and "単勝" in h:
-                win_idx = idx
-            if place_idx is None and "複勝" in h:
-                place_idx = idx
+        out_map: Dict[str, float] = {}
+        out_display: Dict[str, str] = {}
 
-        if horse_idx is None:
-            for tr in rows[:6]:
-                cells = tr.select("th,td")
-                for idx, c in enumerate(cells):
-                    cell_txt = c.get_text(" ", strip=True)
-                    if re.fullmatch(r"\d{1,2}", cell_txt):
-                        horse_idx = idx
-                        break
-                if horse_idx is not None:
-                    break
-
-        if horse_idx is None or (win_idx is None and place_idx is None):
-            continue
-
-        for tr in rows[1:]:
-            cells = tr.select("th,td")
-            if horse_idx >= len(cells):
+        for tr in table.select("tr")[1:]:
+            cells = tr.select("td")
+            if len(cells) < 6:
                 continue
 
-            horse_text = cells[horse_idx].get_text(" ", strip=True)
-            m = re.search(r"(?<!\d)(\d{1,2})(?!\d)", horse_text)
-            if not m:
-                joined = " ".join(c.get_text(" ", strip=True) for c in cells[: max(horse_idx + 1, 2)])
-                m = re.search(r"(?<!\d)(\d{1,2})(?!\d)", joined)
-            if not m:
+            horse_text = cells[1].get_text(" ", strip=True)
+            if not re.fullmatch(r"\d{1,2}", horse_text):
                 continue
 
-            horse = str(int(m.group(1)))
-            if not (1 <= int(horse) <= 18):
+            horse_no = int(horse_text)
+            if not (1 <= horse_no <= 18):
                 continue
 
-            if win_idx is not None and win_idx < len(cells):
-                raw = cells[win_idx].get_text(" ", strip=True)
-                nums = re.findall(r"\d+(?:\.\d+)?", raw.replace(",", ""))
+            horse_key = str(horse_no)
+            horse_suffix = f"{horse_no:02d}"
+
+            odds_node = tr.select_one(f"span[id='{odds_prefix}{horse_suffix}']")
+            if odds_node is None:
+                odds_node = cells[5].select_one("span.Odds") or cells[5]
+
+            odds_text = odds_node.get_text(" ", strip=True)
+
+            if is_place:
+                val, disp = parse_place_text(odds_text)
+                if val is not None and disp is not None:
+                    out_map[horse_key] = val
+                    out_display[horse_key] = disp
+            else:
+                nums = re.findall(r"\d+(?:\.\d+)?", odds_text.replace(",", ""))
                 if nums:
                     val = float(nums[0])
-                    win_map.setdefault(horse, val)
-                    win_display.setdefault(horse, f"{val:.1f}")
+                    out_map[horse_key] = val
+                    out_display[horse_key] = f"{val:.1f}"
 
-            if place_idx is not None and place_idx < len(cells):
-                raw = cells[place_idx].get_text(" ", strip=True)
-                val, disp = parse_place_text(raw)
-                if val is not None and disp is not None:
-                    place_map.setdefault(horse, val)
-                    place_display.setdefault(horse, disp)
+        return out_map, out_display
 
-        if win_map or place_map:
-            break
+    win_map, win_display = parse_single_odds_block("odds_tan_block", "odds-1_", False)
+    place_map, place_display = parse_single_odds_block("odds_fuku_block", "odds-2_", True)
 
     return win_map, win_display, place_map, place_display
 
@@ -953,20 +956,78 @@ def render_result_cards(results: List[BetResult], horse_map: Dict[str, str]) -> 
         )
 
 
+
+
+def get_auth_cookies() -> Dict[str, str]:
+    ctx = getattr(st, "context", None)
+    cookies = getattr(ctx, "cookies", None) if ctx is not None else None
+    if not cookies:
+        return {}
+    try:
+        return dict(cookies)
+    except Exception:
+        return {}
+
+
+def mark_auth_cookie(hours: int = 24) -> None:
+    max_age = hours * 3600
+    expires_at = int(time.time()) + max_age
+    components.html(
+        f"""
+        <script>
+        document.cookie = "tg_auth_ok=1; max-age={max_age}; path=/; SameSite=Lax";
+        document.cookie = "tg_auth_exp={expires_at}; max-age={max_age}; path=/; SameSite=Lax";
+        window.parent.location.reload();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def clear_auth_cookie() -> None:
+    components.html(
+        """
+        <script>
+        document.cookie = "tg_auth_ok=; max-age=0; path=/; SameSite=Lax";
+        document.cookie = "tg_auth_exp=; max-age=0; path=/; SameSite=Lax";
+        </script>
+        """,
+        height=0,
+    )
+
+
+def has_valid_auth_cookie() -> bool:
+    cookies = get_auth_cookies()
+    if cookies.get("tg_auth_ok") != "1":
+        return False
+    try:
+        expires_at = int(cookies.get("tg_auth_exp", "0") or "0")
+    except ValueError:
+        return False
+    if expires_at <= int(time.time()):
+        clear_auth_cookie()
+        return False
+    return True
+
 def require_access() -> None:
     if not APP_PASSWORD:
         return
     if st.session_state.get("auth_ok"):
         return
+    if has_valid_auth_cookie():
+        st.session_state.auth_ok = True
+        return
 
-    render_top_hero("🔐 アクセスコードを入力", "共有されたコードを入れると、このツールを開けます。スマホでも押しやすいように下に余白を取っています。")
+    render_top_hero("🔐 アクセスコードを入力", "共有されたコードを入れると、このツールを開けます。24時間は再入力不要です。")
     st.warning("この公開アプリは簡易アクセスコードで保護されています。")
     st.markdown("<div class='section-card'>", unsafe_allow_html=True)
     code = st.text_input("アクセスコード", type="password", placeholder="共有されたコードを入力")
     if st.button("入る", use_container_width=True):
         if code == APP_PASSWORD:
             st.session_state.auth_ok = True
-            st.rerun()
+            st.success("認証しました。24時間は再入力不要です。")
+            mark_auth_cookie(hours=24)
+            st.stop()
         else:
             st.error("アクセスコードが違います。")
     st.markdown("</div>", unsafe_allow_html=True)
