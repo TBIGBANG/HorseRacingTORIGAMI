@@ -1,3 +1,18 @@
+
+import os
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
+def ensure_playwright_browser():
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            p.chromium.launch()
+    except Exception:
+        import subprocess
+        subprocess.run(["python","-m","playwright","install","chromium"], check=False)
+
+ensure_playwright_browser()
+
 from __future__ import annotations
 
 import itertools
