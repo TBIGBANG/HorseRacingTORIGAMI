@@ -417,6 +417,41 @@ def fetch_html(url: str) -> str:
 
 
 
+
+
+def detect_field_size(html: str) -> Optional[int]:
+    soup = BeautifulSoup(html, "html.parser")
+    values: List[int] = []
+
+    # Prefer race meta like "18頭"
+    page_text = soup.get_text(" ", strip=True)
+    m = re.search(r"(\d{1,2})頭", page_text)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 18:
+            return n
+
+    # Fallback: collect visible horse numbers from odds/shutuba tables
+    for table in soup.select("table"):
+        for tr in table.select("tr"):
+            cells = tr.select("th,td")
+            for cell in cells:
+                txt = cell.get_text(" ", strip=True)
+                if re.fullmatch(r"\d{1,2}", txt):
+                    n = int(txt)
+                    if 1 <= n <= 18:
+                        values.append(n)
+
+    return max(values) if values else None
+
+
+def build_race_context_urls(race_id: str) -> List[str]:
+    return [
+        f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}",
+        f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}",
+        f"https://race.netkeiba.com/odds/index.html?race_id={race_id}",
+        f"https://race.netkeiba.com/race/odds.html?race_id={race_id}",
+    ]
 def fetch_horse_names(race_id: str) -> Dict[str, str]:
     race_id = normalize_race_id(race_id)
     if not race_id or len(race_id) != 12:
@@ -854,6 +889,8 @@ def main() -> None:
     if "last_odds_display_map" not in st.session_state:
         st.session_state.last_odds_display_map = {}
 
+    horse_map: Dict[str, str] = {}
+
     default_examples = {
         "tansho": "3,5,8 100",
         "fukusho": "3,5,8 100",
@@ -906,6 +943,12 @@ def main() -> None:
 
     odds_map: Dict[str, float] = dict(manual_odds)
     odds_display_map: Dict[str, str] = {k: f"{v:.1f}" for k, v in manual_odds.items()}
+
+    if race_id:
+        try:
+            horse_map = fetch_horse_names(race_id)
+        except Exception:
+            horse_map = {}
 
     if fetch_clicked:
         if not race_id:
