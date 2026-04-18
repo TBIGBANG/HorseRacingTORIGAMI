@@ -3,4 +3,4 @@ services:
     name: horse-racing-odds-checker
     env: python
     buildCommand: bash render-build.sh
-    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    startCommand: bash render-start.sh

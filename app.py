@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
+
+# Keep browser binaries in a stable project-local directory on Render.
+APP_DIR = Path(__file__).resolve().parent
+PLAYWRIGHT_DIR = APP_DIR / ".playwright"
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(PLAYWRIGHT_DIR))
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -21,9 +27,6 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 TIMEOUT_SECONDS = 20
-
-# Keep browser binaries inside the app directory on Render
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
 
 
 def normalize_race_id(raw: str) -> str:
@@ -114,8 +117,6 @@ def fetch_html_rendered(url: str, timeout_ms: int = 20000) -> str:
 
         if found_any:
             page.wait_for_timeout(1200)
-
-            # Wait until at least one odds span has numeric text.
             for _ in range(12):
                 texts = page.locator("span[id^='odds-1_'], span[id^='odds-2_']").all_text_contents()
                 joined = " ".join(t.strip() for t in texts if t and t.strip())
@@ -162,10 +163,6 @@ def parse_win_text(raw: str) -> Tuple[Optional[float], Optional[str]]:
 
 
 def parse_b1_odds(html: str) -> Tuple[Dict[str, str], Dict[str, float], Dict[str, str], Dict[str, float], Dict[str, str]]:
-    """
-    Returns:
-      horse_map, win_map, win_display, place_map, place_display
-    """
     soup = BeautifulSoup(html, "html.parser")
 
     horse_map: Dict[str, str] = {}
@@ -177,7 +174,6 @@ def parse_b1_odds(html: str) -> Tuple[Dict[str, str], Dict[str, float], Dict[str
     def extract_row_odds_text(row, horse_no: int, is_place: bool) -> str:
         suffix = f"{horse_no:02d}"
 
-        # 1) exact id in the same row
         sel = f"span[id='odds-2_{suffix}']" if is_place else f"span[id='odds-1_{suffix}']"
         node = row.select_one(sel)
         if node is not None:
@@ -185,21 +181,18 @@ def parse_b1_odds(html: str) -> Tuple[Dict[str, str], Dict[str, float], Dict[str
             if txt:
                 return txt
 
-        # 2) odds span in odds cell
         node = row.select_one("td.Odds span.Odds, td.Odds span[class*='Odds']")
         if node is not None:
             txt = node.get_text(" ", strip=True)
             if txt:
                 return txt
 
-        # 3) odds td itself
         node = row.select_one("td.Odds")
         if node is not None:
             txt = node.get_text(" ", strip=True)
             if txt:
                 return txt
 
-        # 4) last td
         cells = row.select("td")
         if cells:
             txt = cells[-1].get_text(" ", strip=True)
@@ -208,14 +201,13 @@ def parse_b1_odds(html: str) -> Tuple[Dict[str, str], Dict[str, float], Dict[str
 
         return ""
 
-    # First pass: explicit table rows
     row_groups = [
         ("#odds_tan_block table.RaceOdds_HorseList_Table tr", False),
         ("#odds_fuku_block table.RaceOdds_HorseList_Table tr", True),
-        ("#odds_view_form table.RaceOdds_HorseList_Table tr", False),  # fallback rendered area
+        ("#odds_view_form table.RaceOdds_HorseList_Table tr", False),
     ]
 
-    for selector, is_place in row_groups:
+    for selector, default_is_place in row_groups:
         for row in soup.select(selector):
             name_cell = row.select_one(".Horse_Name")
             if name_cell is None:
@@ -226,14 +218,14 @@ def parse_b1_odds(html: str) -> Tuple[Dict[str, str], Dict[str, float], Dict[str
                 continue
 
             horse_no: Optional[int] = None
+            is_place = default_is_place
 
             odds_span = row.select_one("span[id^='odds-1_'], span[id^='odds-2_']")
             if odds_span is not None:
                 m = re.search(r"odds-(\d+)_(\d{1,2})$", odds_span.get("id", ""))
                 if m:
                     horse_no = int(m.group(2))
-                    if m.group(1) == "2":
-                        is_place = True
+                    is_place = (m.group(1) == "2")
 
             if horse_no is None:
                 nums: List[int] = []
@@ -271,7 +263,6 @@ def parse_b1_odds(html: str) -> Tuple[Dict[str, str], Dict[str, float], Dict[str
                     win_map[horse_key] = val
                     win_display[horse_key] = disp
 
-    # Second pass: global id scan for odds if rows were partially missing
     for span in soup.select("span[id^='odds-1_']"):
         m = re.search(r"odds-1_(\d{1,2})$", span.get("id", ""))
         if not m:
@@ -303,7 +294,6 @@ def fetch_b1_data(race_id: str, use_render: bool) -> Tuple[str, Dict[str, str], 
 
 
 st.set_page_config(page_title="競馬オッズ確認ツール", page_icon="🏇", layout="centered")
-
 st.title("競馬オッズ確認ツール")
 st.caption("まずは netkeiba の単勝・複勝を正しく取れることだけを確認する版です。")
 
@@ -322,13 +312,15 @@ if st.button("netkeibaから1回取得", type="primary"):
 
         st.success("取得処理は完了しました。")
         st.caption(f"取得元: {url}")
+        st.caption(f"Playwright browser path: {os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '')}")
 
         if not win_map and not place_map:
-            st.warning("オッズを取得できませんでした。JS差し込み後のHTMLでも空の可能性があります。")
+            st.warning("オッズを取得できませんでした。")
             st.stop()
 
         rows = []
-        for horse_no in sorted(set(horse_map.keys()) | set(win_map.keys()) | set(place_map.keys()), key=lambda x: int(x)):
+        keys = sorted(set(horse_map.keys()) | set(win_map.keys()) | set(place_map.keys()), key=lambda x: int(x))
+        for horse_no in keys:
             rows.append({
                 "馬番": horse_no,
                 "馬名": horse_map.get(horse_no, ""),

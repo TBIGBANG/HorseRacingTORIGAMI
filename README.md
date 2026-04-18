@@ -1,11 +1,6 @@
-# 競馬オッズ確認ツール（クリーン版・Playwright対応）
+# 競馬オッズ確認ツール（Playwrightパス修正版）
 
-この版は、まず netkeiba の `type=b1` ページから
-- 馬名
-- 単勝
-- 複勝
-
-が正しく取れるかだけを確認するための最小版です。
+この版では Playwright のブラウザ保存先を `app.py` と同じ階層の `.playwright/` に固定しています。
 
 ## Render 設定
 
@@ -16,10 +11,5 @@ bash render-build.sh
 
 Start Command:
 ```bash
-streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-```
-
-環境変数（任意）:
-```text
-PLAYWRIGHT_BROWSERS_PATH=0
+bash render-start.sh
 ```
