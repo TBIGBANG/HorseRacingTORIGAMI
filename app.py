@@ -477,8 +477,8 @@ def detect_field_size(html: str) -> Optional[int]:
 
 def build_race_context_urls(race_id: str) -> List[str]:
     return [
-        f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}",
         f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}",
+        f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}",
         f"https://race.netkeiba.com/odds/index.html?race_id={race_id}",
         f"https://race.netkeiba.com/race/odds.html?race_id={race_id}",
     ]
