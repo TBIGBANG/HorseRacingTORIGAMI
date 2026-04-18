@@ -387,7 +387,10 @@ def normalize_race_id(raw: str) -> str:
 
 def build_odds_urls(race_id: str, bet_type: str) -> List[str]:
     if bet_type in {"tansho", "fukusho"}:
-        return [f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"]
+        return [
+            f"https://race.netkeiba.com/odds/odds_get_form.html?type=b1&race_id={race_id}&rf=shutuba_submenu",
+            f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}",
+        ]
 
     urls: List[str] = []
     for q in BET_TYPE_QUERY_TYPES.get(bet_type, []):
@@ -480,6 +483,7 @@ def detect_field_size(html: str) -> Optional[int]:
 
 def build_race_context_urls(race_id: str) -> List[str]:
     return [
+        f"https://race.netkeiba.com/odds/odds_get_form.html?type=b1&race_id={race_id}&rf=shutuba_submenu",
         f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}",
         f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}",
     ]
@@ -834,7 +838,10 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
     last_url = candidate_urls[0]
 
     if bet_type in {"tansho", "fukusho"}:
-        candidate_urls = [f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"]
+        candidate_urls = [
+            f"https://race.netkeiba.com/odds/odds_get_form.html?type=b1&race_id={race_id}&rf=shutuba_submenu",
+            f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}",
+        ]
         for url in candidate_urls:
             last_url = url
             try:
@@ -849,12 +856,16 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
 
                 if bet_type == "tansho" and win_map:
                     warning_parts = [f"認識頭数: {local_field_size}頭"] if local_field_size else []
+                    if "odds_get_form.html" in url:
+                        warning_parts.append("AJAX用オッズ断片から取得しました。")
                     return win_map, win_display, url, " / ".join(warning_parts) if warning_parts else None
 
                 if bet_type == "fukusho" and place_map:
                     warning_parts = ["複勝の計算は下限オッズを使用します。"]
                     if local_field_size:
                         warning_parts.insert(0, f"認識頭数: {local_field_size}頭")
+                    if "odds_get_form.html" in url:
+                        warning_parts.append("AJAX用オッズ断片から取得しました。")
                     return place_map, place_display, url, " / ".join(warning_parts)
             except Exception as exc:
                 last_error = exc
