@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: horseracing-torigami
+    env: python
+    buildCommand: bash render-build.sh
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    plan: free
