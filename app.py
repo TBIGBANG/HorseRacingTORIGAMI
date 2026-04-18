@@ -6,7 +6,7 @@ try:
 except Exception:
     sync_playwright = None
 with sync_playwright() as p:
-p.chromium.launch()
+    p.chromium.launch()
 except Exception:
 import subprocess
 subprocess.run(["python","-m","playwright","install","chromium"], check=False)
