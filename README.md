@@ -1,4 +1,4 @@
-# 競馬オッズAPI確認ツール
+# 競馬オッズAPI確認ツール（完成版）
 
 この版は HTML の `---.-` を読むのではなく、
 JS が参照している `https://race.netkeiba.com/api/api_get_jra_odds.html`

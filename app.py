@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import re
 import zlib
@@ -29,28 +30,11 @@ def build_odds_api_url() -> str:
     return "https://race.netkeiba.com/api/api_get_jra_odds.html"
 
 
-def fetch_text(url: str, params: Optional[Dict[str, Any]] = None) -> str:
+def fetch_bytes(url: str, params: Optional[Dict[str, Any]] = None, race_id: str = "") -> bytes:
     headers = {
         "User-Agent": USER_AGENT,
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Referer": "https://race.netkeiba.com/",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT_SECONDS)
-    response.raise_for_status()
-    # Let requests decide first, then fallback
-    if not response.encoding:
-        response.encoding = response.apparent_encoding or "utf-8"
-    return response.text
-
-
-def fetch_bytes(url: str, params: Optional[Dict[str, Any]] = None) -> bytes:
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Referer": "https://race.netkeiba.com/",
+        "Referer": f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}" if race_id else "https://race.netkeiba.com/",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
         "X-Requested-With": "XMLHttpRequest",
@@ -62,19 +46,17 @@ def fetch_bytes(url: str, params: Optional[Dict[str, Any]] = None) -> bytes:
 
 def fetch_fragment_html(race_id: str) -> str:
     url = build_odds_fragment_url(race_id)
-    html_bytes = fetch_bytes(url)
-
-    for enc in ["EUC-JP", "utf-8", "cp932"]:
+    raw = fetch_bytes(url, race_id=race_id)
+    for enc in ["EUC-JP", "utf-8", "cp932", "latin1"]:
         try:
-            return html_bytes.decode(enc)
+            return raw.decode(enc)
         except Exception:
             pass
-    return html_bytes.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace")
 
 
 def parse_fragment_rows(html: str) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
-
     horse_map: Dict[str, str] = {}
     win_placeholder: Dict[str, str] = {}
     place_placeholder: Dict[str, str] = {}
@@ -124,125 +106,136 @@ def parse_fragment_rows(html: str) -> Tuple[Dict[str, str], Dict[str, str], Dict
     return horse_map, win_placeholder, place_placeholder
 
 
-def try_json_loads(text: str) -> Optional[dict]:
+def try_json_loads(text: str) -> Optional[Any]:
     try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return obj
+        return json.loads(text)
     except Exception:
         return None
-    return None
 
 
-def try_extract_json_object(text: str) -> Optional[dict]:
-    # direct JSON
+def try_extract_json_object(text: str) -> Optional[Any]:
     obj = try_json_loads(text)
-    if obj:
+    if obj is not None:
         return obj
 
-    # wrapper like callback({...})
     m = re.search(r'(\{.*\})', text, flags=re.S)
     if m:
         obj = try_json_loads(m.group(1))
-        if obj:
+        if obj is not None:
             return obj
 
-    # quoted JSON string inside outer JSON
+    m = re.search(r'(\[.*\])', text, flags=re.S)
+    if m:
+        obj = try_json_loads(m.group(1))
+        if obj is not None:
+            return {"odds": obj}
+
     m = re.search(r'"data"\s*:\s*"(.+?)"', text, flags=re.S)
     if m:
-        inner = m.group(1).encode("utf-8").decode("unicode_escape")
-        obj = try_json_loads(inner)
-        if obj:
-            return obj
+        try:
+            inner = m.group(1).encode("utf-8").decode("unicode_escape")
+            obj = try_json_loads(inner)
+            if obj is not None:
+                return obj
+        except Exception:
+            pass
 
     return None
 
 
 def try_decompress_bytes(raw: bytes) -> Optional[str]:
-    candidates: List[bytes] = [raw]
-
-    # maybe base64 text
     try:
-        stripped = raw.strip()
-        if stripped:
-            b64 = base64.b64decode(stripped, validate=False)
-            if b64:
-                candidates.append(b64)
+        return raw.decode("utf-8")
     except Exception:
         pass
 
-    for blob in candidates:
-        for wbits in [zlib.MAX_WBITS, -zlib.MAX_WBITS, 15 + 32]:
-            try:
-                dec = zlib.decompress(blob, wbits)
-                try:
-                    return dec.decode("utf-8")
-                except Exception:
-                    try:
-                        return dec.decode("EUC-JP")
-                    except Exception:
-                        return dec.decode("latin1", errors="replace")
-            except Exception:
-                pass
+    try:
+        return gzip.decompress(raw).decode("utf-8")
+    except Exception:
+        pass
+
+    for wbits in [zlib.MAX_WBITS, -zlib.MAX_WBITS, 15 + 32]:
+        try:
+            return zlib.decompress(raw, wbits).decode("utf-8")
+        except Exception:
+            pass
+
+    try:
+        b = base64.b64decode(raw)
+        return try_decompress_bytes(b)
+    except Exception:
+        pass
+
     return None
 
 
-def parse_api_payload_obj(obj: dict) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """
-    Returns:
-      win_display_map, place_display_map
-    Based on uploaded HTML JS:
-      _data['odds'][1][no][0] -> 単勝
-      _data['odds'][2][no][0], [1] -> 複勝 min/max
-    """
-    # Some responses may be {status:..., data:{...}}
-    data = obj.get("data", obj)
-    odds = data.get("odds", {})
+def parse_api_payload_obj(obj: Any) -> Tuple[Dict[str, str], Dict[str, str]]:
+    win: Dict[str, str] = {}
+    place: Dict[str, str] = {}
 
-    win_display: Dict[str, str] = {}
-    place_display: Dict[str, str] = {}
-
-    # keys may be int-like strings or ints
-    type1 = odds.get("1", odds.get(1, {}))
-    type2 = odds.get("2", odds.get(2, {}))
-
-    if isinstance(type1, dict):
-        for no, arr in type1.items():
+    def add_win(no: Any, val: Any) -> None:
+        try:
             key = str(int(no))
-            if isinstance(arr, list) and arr:
-                val = arr[0]
-                if val is not None and str(val).strip():
-                    try:
-                        win_display[key] = f"{float(val):.1f}"
-                    except Exception:
-                        win_display[key] = str(val)
+            win[key] = f"{float(val):.1f}"
+        except Exception:
+            pass
 
-    if isinstance(type2, dict):
-        for no, arr in type2.items():
+    def add_place(no: Any, lo: Any, hi: Any) -> None:
+        try:
             key = str(int(no))
-            if isinstance(arr, list) and len(arr) >= 2:
-                lo, hi = arr[0], arr[1]
-                if lo is not None and hi is not None and str(lo).strip() and str(hi).strip():
-                    try:
-                        place_display[key] = f"{float(lo):.1f} - {float(hi):.1f}"
-                    except Exception:
-                        place_display[key] = f"{lo} - {hi}"
+            place[key] = f"{float(lo):.1f} - {float(hi):.1f}"
+        except Exception:
+            pass
 
-    return win_display, place_display
+    data = obj.get("data", obj) if isinstance(obj, dict) else obj
+    odds = data.get("odds", data) if isinstance(data, dict) else data
+
+    # Preferred known structure
+    if isinstance(odds, dict):
+        type1 = odds.get("1", odds.get(1, {}))
+        type2 = odds.get("2", odds.get(2, {}))
+
+        if isinstance(type1, dict):
+            for no, arr in type1.items():
+                if isinstance(arr, list) and arr:
+                    add_win(no, arr[0])
+
+        if isinstance(type2, dict):
+            for no, arr in type2.items():
+                if isinstance(arr, list) and len(arr) >= 2:
+                    add_place(no, arr[0], arr[1])
+
+    # Fallback recursive search
+    def walk(o: Any) -> None:
+        if isinstance(o, dict):
+            # case: {"1": {"1": [24.0], "2": [64.8]}, "2": {...}}
+            for k, v in o.items():
+                if (k == "1" or k == 1) and isinstance(v, dict):
+                    for no, arr in v.items():
+                        if isinstance(arr, list) and arr:
+                            add_win(no, arr[0])
+                elif (k == "2" or k == 2) and isinstance(v, dict):
+                    for no, arr in v.items():
+                        if isinstance(arr, list) and len(arr) >= 2:
+                            add_place(no, arr[0], arr[1])
+                walk(v)
+        elif isinstance(o, list):
+            for item in o:
+                walk(item)
+
+    walk(obj)
+    return win, place
 
 
 def fetch_api_odds(race_id: str) -> Tuple[Dict[str, str], Dict[str, str], str]:
-    """
-    Returns:
-      win_display_map, place_display_map, debug_message
-    """
     url = build_odds_api_url()
-
     attempts = [
-        {"raceId": race_id, "isPremium": 0, "compress": "true"},
-        {"raceId": race_id, "isPremium": 0, "compress": "false"},
-        {"race_id": race_id, "isPremium": 0, "compress": "true"},
-        {"race_id": race_id, "isPremium": 0, "compress": "false"},
+        {"raceId": race_id, "type": "b1", "_": "1", "compress": "true", "isPremium": "0"},
+        {"raceId": race_id, "type": "b1", "_": "1", "compress": "false", "isPremium": "0"},
+        {"race_id": race_id, "type": "b1", "_": "1", "compress": "true", "isPremium": "0"},
+        {"race_id": race_id, "type": "b1", "_": "1", "compress": "false", "isPremium": "0"},
+        {"raceId": race_id, "type": "b1", "compress": "true"},
+        {"raceId": race_id, "type": "b1", "compress": "false"},
         {"raceId": race_id, "compress": "true"},
         {"raceId": race_id, "compress": "false"},
     ]
@@ -251,37 +244,41 @@ def fetch_api_odds(race_id: str) -> Tuple[Dict[str, str], Dict[str, str], str]:
 
     for params in attempts:
         try:
-            raw = fetch_bytes(url, params=params)
+            raw = fetch_bytes(url, params=params, race_id=race_id)
             debug_notes.append(f"attempt params={params} bytes={len(raw)}")
 
-            # 1) raw bytes decoded as text
+            # direct decodes
             for enc in ["utf-8", "EUC-JP", "cp932", "latin1"]:
                 try:
                     text = raw.decode(enc)
                     obj = try_extract_json_object(text)
-                    if obj:
+                    if obj is not None:
                         win, place = parse_api_payload_obj(obj)
                         if win or place:
                             return win, place, " / ".join(debug_notes + [f"decoded={enc}", "json=direct"])
                 except Exception:
                     pass
 
-            # 2) try compressed
+            # decompression path
             dec_text = try_decompress_bytes(raw)
             if dec_text:
                 obj = try_extract_json_object(dec_text)
-                if obj:
+                if obj is not None:
                     win, place = parse_api_payload_obj(obj)
                     if win or place:
                         return win, place, " / ".join(debug_notes + ["json=decompressed"])
 
-            # 3) maybe response is already text from requests
-            text = fetch_text(url, params=params)
-            obj = try_extract_json_object(text)
-            if obj:
-                win, place = parse_api_payload_obj(obj)
-                if win or place:
-                    return win, place, " / ".join(debug_notes + ["json=text-fallback"])
+            # requests text path
+            try:
+                text = raw.decode("utf-8", errors="replace")
+                obj = try_extract_json_object(text)
+                if obj is not None:
+                    win, place = parse_api_payload_obj(obj)
+                    if win or place:
+                        return win, place, " / ".join(debug_notes + ["json=text-fallback"])
+            except Exception:
+                pass
+
         except Exception as exc:
             debug_notes.append(f"attempt params={params} err={exc}")
 
