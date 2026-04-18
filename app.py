@@ -133,6 +133,7 @@ def fetch_html_raw(url: str) -> str:
     return html_bytes.decode("latin1", errors="replace")
 
 
+
 def fetch_html_rendered(url: str, timeout_ms: int = 20000) -> str:
     ensure_playwright_ready()
 
@@ -150,36 +151,101 @@ def fetch_html_rendered(url: str, timeout_ms: int = 20000) -> str:
             viewport={"width": 1440, "height": 2600},
             locale="ja-JP",
         )
-        page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
 
-        selectors = [
-            "span[id^='odds-1_']",
-            "span[id^='odds-2_']",
-            "#odds_tan_block table.RaceOdds_HorseList_Table",
-            "#odds_view_form table.RaceOdds_HorseList_Table",
-        ]
+        # Heavy resources and many third-party requests make Render hang.
+        def route_handler(route):
+            req = route.request
+            rtype = req.resource_type
+            url_l = req.url.lower()
 
-        found_any = False
-        for selector in selectors:
+            blocked_types = {"image", "media", "font"}
+            blocked_keywords = [
+                "googletagmanager",
+                "google-analytics",
+                "doubleclick",
+                "adservice",
+                "googlesyndication",
+                "adagio",
+                "clarity",
+                "analytics",
+                "apstag",
+                "browsi",
+                "fluct",
+                "gpt",
+            ]
+
+            if rtype in blocked_types or any(k in url_l for k in blocked_keywords):
+                route.abort()
+            else:
+                route.continue_()
+
+        page.route("**/*", route_handler)
+
+        # Prefer the lighter AJAX odds fragment first if the caller passed index.html
+        candidates = [url]
+        if "index.html?type=b1" in url:
+            ajax_url = re.sub(
+                r"/odds/index\.html\?type=b1&race_id=(\d+)",
+                r"/odds/odds_get_form.html?type=b1&race_id=\1&rf=shutuba_submenu",
+                url,
+            )
+            if ajax_url != url:
+                candidates = [ajax_url, url]
+
+        last_exc = None
+
+        for candidate in candidates:
             try:
-                page.wait_for_selector(selector, timeout=timeout_ms)
-                found_any = True
-                break
-            except PlaywrightTimeoutError:
+                # "commit" is much less likely to stall than waiting for DOMContentLoaded on this page.
+                page.goto(candidate, wait_until="commit", timeout=min(timeout_ms, 12000))
+            except Exception as exc:
+                last_exc = exc
+
+            # Even if goto timed out, the page may still have partial DOM.
+            for selector in [
+                "span[id^='odds-1_']",
+                "span[id^='odds-2_']",
+                "#odds_tan_block table.RaceOdds_HorseList_Table",
+                "#odds_view_form table.RaceOdds_HorseList_Table",
+                "table.RaceOdds_HorseList_Table",
+            ]:
+                try:
+                    page.wait_for_selector(selector, timeout=4000)
+                    break
+                except Exception:
+                    pass
+
+            # Give JS a short chance to inject odds text
+            try:
+                for _ in range(10):
+                    texts = page.locator("span[id^='odds-1_'], span[id^='odds-2_']").all_text_contents()
+                    joined = " ".join(t.strip() for t in texts if t and t.strip())
+                    if re.search(r"\d+\.\d+|\d+\s*-\s*\d+", joined):
+                        html = page.content()
+                        browser.close()
+                        return html
+                    page.wait_for_timeout(400)
+            except Exception:
                 pass
 
-        if found_any:
-            page.wait_for_timeout(1200)
-            for _ in range(12):
-                texts = page.locator("span[id^='odds-1_'], span[id^='odds-2_']").all_text_contents()
-                joined = " ".join(t.strip() for t in texts if t and t.strip())
-                if re.search(r"\d+\.\d+|\d+\s*-\s*\d+", joined):
-                    break
-                page.wait_for_timeout(500)
+            # fallback: if the table itself exists, return current DOM anyway
+            try:
+                if page.locator("table.RaceOdds_HorseList_Table").count() > 0:
+                    html = page.content()
+                    browser.close()
+                    return html
+            except Exception:
+                pass
 
         html = page.content()
         browser.close()
-        return html
+
+        if html:
+            return html
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("描画後HTMLの取得に失敗しました。")
 
 
 def parse_place_text(raw: str) -> Tuple[Optional[float], Optional[str]]:
@@ -368,7 +434,7 @@ if st.button("netkeibaから1回取得", type="primary"):
         st.caption(f"Playwright browser path: {os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '')}")
 
         if not win_map and not place_map:
-            st.warning("オッズを取得できませんでした。")
+            st.warning("オッズを取得できませんでした。描画後HTMLでもオッズが空、または取得途中で止まっています。")
             st.stop()
 
         rows = []
