@@ -1,8 +1,7 @@
-# 競馬オッズAPI確認ツール（完成版）
+# 競馬オッズAPI確認ツール（race_id修正版）
 
-この版は HTML の `---.-` を読むのではなく、
-JS が参照している `https://race.netkeiba.com/api/api_get_jra_odds.html`
-を直接呼んでオッズを取りに行きます。
+APIレスポンスの `reason: race_id empty` に対応して、
+パラメータ名を `race_id` に修正した版です。
 
 ## Render 設定
 

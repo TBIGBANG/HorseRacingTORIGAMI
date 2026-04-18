@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: horse-racing-odds-api-final
+    name: horse-racing-api-raceid-fix
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
