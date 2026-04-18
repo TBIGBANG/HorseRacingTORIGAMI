@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            p.chromium.launch()
-    except Exception:
-        import subprocess
-        subprocess.run(["python","-m","playwright","install","chromium"], check=False)
+try:
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+p.chromium.launch()
+except Exception:
+import subprocess
+subprocess.run(["python","-m","playwright","install","chromium"], check=False)
 
 ensure_playwright_browser()
 
@@ -330,7 +330,7 @@ def parse_bets(text: str, bet_type: str, max_horses: int = 18) -> Tuple[List[Bet
             continue
         amount_text = parts[-1]
         selection_text = " ".join(parts[:-1]).replace(" ", "")
-        try:
+try:
             amount = int(amount_text)
         except ValueError:
             errors.append(f"{idx}行目: 金額は整数で入力してください")
@@ -367,7 +367,7 @@ def parse_manual_odds(text: str, bet_type: str, max_horses: int = 18) -> Tuple[D
             continue
         odds_text = parts[-1]
         selection_text = " ".join(parts[:-1]).replace(" ", "")
-        try:
+try:
             odds = float(odds_text)
         except ValueError:
             errors.append(f"手動オッズ {idx}行目: オッズは数値で入力してください")
@@ -447,7 +447,7 @@ def fetch_html(url: str) -> str:
         m = re.search(r"charset=([A-Za-z0-9_\-]+)", content_type, flags=re.I)
         if m:
             enc = m.group(1)
-            try:
+try:
                 return html_bytes.decode(enc, errors="replace")
             except Exception:
                 pass
@@ -457,7 +457,7 @@ def fetch_html(url: str) -> str:
         m = re.search(r'charset=["\']?([A-Za-z0-9_\-]+)', head_ascii, flags=re.I)
         if m:
             enc = m.group(1)
-            try:
+try:
                 return html_bytes.decode(enc, errors="replace")
             except Exception:
                 pass
@@ -466,7 +466,7 @@ def fetch_html(url: str) -> str:
         for enc in [response.apparent_encoding, response.encoding, "EUC-JP", "cp932", "utf-8"]:
             if not enc:
                 continue
-            try:
+try:
                 return html_bytes.decode(enc, errors="replace")
             except Exception:
                 pass
@@ -501,7 +501,7 @@ def fetch_html_rendered(url: str, wait_selectors: Optional[List[str]] = None, ti
         # Wait for at least one useful selector and non-empty odds text
         found = False
         for sel in wait_selectors:
-            try:
+try:
                 page.wait_for_selector(sel, timeout=timeout_ms)
                 found = True
                 break
@@ -513,7 +513,7 @@ def fetch_html_rendered(url: str, wait_selectors: Optional[List[str]] = None, ti
             page.wait_for_timeout(1200)
 
             # If odds spans exist but are empty, wait a bit more
-            try:
+try:
                 for _ in range(10):
                     texts = page.locator("span[id^='odds-1_'], span[id^='odds-2_']").all_text_contents()
                     joined = " ".join(t.strip() for t in texts if t and t.strip())
@@ -636,7 +636,7 @@ def fetch_horse_names(race_id: str) -> Dict[str, str]:
         return {}
 
     url = f"https://race.netkeiba.com/odds/index.html?type=b1&race_id={race_id}"
-    try:
+try:
         html = fetch_html(url)
     except Exception:
         return {}
@@ -897,7 +897,7 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
     detected_field_size: Optional[int] = None
 
     for ctx_url in build_race_context_urls(race_id):
-        try:
+try:
             ctx_html = fetch_html(ctx_url)
             detected_field_size = detect_field_size(ctx_html)
             if detected_field_size:
@@ -915,14 +915,14 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
         ]
         for url in candidate_urls:
             last_url = url
-            try:
+try:
                 html = fetch_html(url)
                 local_field_size = detected_field_size or detect_field_size(html)
                 win_map, win_display, place_map, place_display = parse_win_place_table(html)
 
                 # If raw HTML didn't contain inserted odds, render with browser and wait for insertion
                 if not win_map and not place_map and "index.html?type=b1" in url:
-                    try:
+try:
                         rendered_html = fetch_html_rendered(
                             url,
                             wait_selectors=[
@@ -973,7 +973,7 @@ def scrape_netkeiba_odds(race_id: str, bet_type: str) -> Tuple[Dict[str, float],
 
     for url in candidate_urls:
         last_url = url
-        try:
+try:
             html = fetch_html(url)
             local_field_size = detected_field_size or detect_field_size(html)
             odds_map = extract_odds_candidates_from_tables(html, bet_type, field_size=local_field_size)
@@ -1116,7 +1116,7 @@ def get_auth_cookies() -> Dict[str, str]:
     cookies = getattr(ctx, "cookies", None) if ctx is not None else None
     if not cookies:
         return {}
-    try:
+try:
         return dict(cookies)
     except Exception:
         return {}
@@ -1153,7 +1153,7 @@ def has_valid_auth_cookie() -> bool:
     cookies = get_auth_cookies()
     if cookies.get("tg_auth_ok") != "1":
         return False
-    try:
+try:
         expires_at = int(cookies.get("tg_auth_exp", "0") or "0")
     except ValueError:
         return False
@@ -1288,7 +1288,7 @@ def main() -> None:
     odds_display_map: Dict[str, str] = {k: f"{v:.1f}" for k, v in manual_odds.items()}
 
     if race_id:
-        try:
+try:
             horse_map = fetch_horse_names(race_id)
         except Exception:
             horse_map = {}
@@ -1297,7 +1297,7 @@ def main() -> None:
         if not race_id:
             st.error("レースIDを入力してください。")
         else:
-            try:
+try:
                 fetched_odds, fetched_odds_display, fetched_url, warning = scrape_netkeiba_odds(race_id=race_id, bet_type=bet_type)
                 st.session_state.last_odds_map = fetched_odds
                 st.session_state.last_odds_display_map = fetched_odds_display
